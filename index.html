@@ -1,0 +1,4258 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Warzone — prototype IA tactique (debug)</title>
+<style>
+  :root{
+    --bg:#0b0e13; --panel:#121822; --panel2:#0f141d; --line:#232c38;
+    --txt:#c9d4e2; --dim:#77839a; --acc:#5aa9e6; --warn:#e8b64c; --bad:#e05a4c; --ok:#5fc98a;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+    font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+  #app{display:flex;gap:12px;padding:12px;align-items:flex-start;justify-content:center;flex-wrap:wrap}
+  #stage{position:relative}
+  canvas{background:#070a0f;border:1px solid var(--line);border-radius:4px;display:block;cursor:crosshair}
+  #overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(6,8,12,.78);border-radius:4px;text-align:center;padding:20px}
+  #overlay.on{display:flex}
+  #ovTitle{font-size:32px;letter-spacing:2px;color:var(--bad);margin-bottom:8px;font-weight:700}
+  #ovSub{color:var(--dim);font-size:13px}
+  #panel{width:268px;background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:10px}
+  #panel h1{font-size:12px;margin:0 0 2px;letter-spacing:1px;color:var(--acc)}
+  #panel h2{font-size:11px;margin:12px 0 5px;color:var(--dim);letter-spacing:1px;
+    border-bottom:1px solid var(--line);padding-bottom:3px;text-transform:uppercase;font-weight:600}
+  .row{display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap}
+  button{background:var(--panel2);color:var(--txt);border:1px solid var(--line);border-radius:3px;
+    padding:5px 8px;font:inherit;cursor:pointer;flex:1 1 auto;min-width:70px}
+  button:hover{border-color:var(--acc);color:#fff}
+  button.on{border-color:var(--acc);background:#16283a;color:#fff}
+  input[type=text]{background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+    border-radius:3px;padding:5px 6px;font:inherit;width:76px}
+  table{width:100%;border-collapse:collapse}
+  td{padding:1px 0;vertical-align:top}
+  td.k{color:var(--dim);white-space:nowrap;padding-right:6px}
+  td.v{text-align:right;font-variant-numeric:tabular-nums}
+  .sq{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+  .help{color:var(--dim);font-size:11px}
+  .help b{color:var(--txt);font-weight:600}
+  .st{color:var(--acc)}
+  #banner{position:absolute;left:0;right:0;top:8px;text-align:center;pointer-events:none;
+    font-size:15px;letter-spacing:3px;font-weight:700;text-shadow:0 0 8px #000}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="cv" width="840" height="540"></canvas>
+    <div id="banner"></div>
+    <div id="overlay">
+      <div>
+        <div id="ovTitle">MISSION ÉCHOUÉE</div>
+        <div id="ovSub">Appuie sur <b>R</b> pour recommencer le scénario.</div>
+      </div>
+    </div>
+  </div>
+
+  <aside id="panel">
+    <h1>PROTOTYPE — IA TACTIQUE</h1>
+    <div class="help">Zone unique · vue de dessus · debug F1</div>
+
+    <h2>Scénario</h2>
+    <div class="row">
+      <button id="btnReset">Reset (R)</button>
+      <button id="btnPause">Pause (Espace)</button>
+    </div>
+    <div class="row">
+      <button id="btnSpeed">Vitesse x1</button>
+      <button id="btnDebug">Debug ON (F1)</button>
+    </div>
+    <div class="row">
+      <button id="btnRock">Bruit de pierre aléatoire</button>
+    </div>
+    <div class="row">
+      <input id="seedInput" type="text" value="12345" />
+      <button id="btnSeed">Graine</button>
+    </div>
+
+    <h2>État</h2>
+    <table>
+      <tr><td class="k">Alerte</td><td class="v st" id="vAlert">CALM</td></tr>
+      <tr><td class="k">Temps</td><td class="v" id="vTime">0.0 s</td></tr>
+      <tr><td class="k">Ennemis vivants</td><td class="v" id="vAlive">0</td></tr>
+      <tr><td class="k">Renforts</td><td class="v" id="vReinf">—</td></tr>
+      <tr><td class="k">PV joueur</td><td class="v" id="vHp">100</td></tr>
+      <tr><td class="k">FPS</td><td class="v" id="vFps">—</td></tr>
+      <tr><td class="k">Graine</td><td class="v" id="vSeed">12345</td></tr>
+    </table>
+
+    <h2>Légende</h2>
+    <div><span class="sq" style="background:#d9822b"></span>Milice (M) — yard + sentinelle</div>
+    <div><span class="sq" style="background:#4f9be8"></span>Réguliers (R) — caserne</div>
+    <div><span class="sq" style="background:#b06be8"></span>Forces spéciales (S) — renfort NE</div>
+    <div><span class="sq" style="background:#e8e8e8"></span>Joueur</div>
+
+    <h2>Commandes</h2>
+    <div class="help">
+      <b>ZQSD / WASD</b> déplacement · <b>Souris</b> visée<br/>
+      <b>Clic gauche</b> tirer · <b>Shift</b> sprint (bruyant)<br/>
+      <b>C</b> accroupi (silencieux, discret)<br/>
+      <b>Q</b> lancer une pierre (bruit, 25 m)<br/>
+      <b>F1</b> vue debug · <b>R</b> reset · <b>Espace</b> pause<br/>
+      <b>+ / -</b> échelle de temps (0.25x → 4x)
+    </div>
+    <h2>Conseil scénario 1</h2>
+    <div class="help">
+      Tuer la sentinelle (95;30) depuis l'angle NE hors du mur
+      (vers 112;18) reste <b>silencieux</b> si la patrouille est
+      dans le sud de la cour.
+    </div>
+  </aside>
+</div>
+
+<script>
+/* =====================================================================
+   PROTOTYPE WARZONE — SYSTÈME DE RÉACTION DE L'IA ENNEMIE
+   Fichier unique, aucune dépendance, fonctionne en file://
+   Commentaires en français, identifiants en anglais, UI en français.
+   Namespace global unique : G
+
+   SOMMAIRE
+     1.  CONFIG
+     2.  UTIL
+     3.  PERCEPTION  (perception.js inliné, voir note CHANGES)
+     4.  WORLD       (géométrie, LOS, occlusion, grille, A*, points de couverture)
+     5.  DOCTRINES
+     6.  RADIO
+     7.  SOLDAT + CERVEAU (HSM)
+     8.  SQUAD
+     9.  COMMAND
+     10. JOUEUR & COMBAT
+     11. RENDU & DEBUG UI
+     12. SCÉNARIO & SELF-TESTS
+     13. BOUCLE PRINCIPALE
+
+   RÈGLE D'OR — PAS D'OMNISCIENCE
+     Le cerveau d'un soldat reçoit un objet `ctx` construit par buildCtx()
+     qui ne contient AUCUNE référence au joueur : uniquement sa mémoire de
+     contacts, ses ordres, sa doctrine, son moral, la géométrie statique et
+     les infos de son escouade/commandement. Deux garde-fous :
+       - buildCtx() gèle le ctx et (en mode debug) l'enveloppe dans un Proxy
+         qui lève une erreur si le code tente d'accéder à une clé 'player';
+       - les self-tests (?test=1) remplacent G.player par un Proxy piégé et
+         exécutent le cerveau : toute lecture = échec du test.
+   ===================================================================== */
+(function () {
+'use strict';
+
+/* =====================================================================
+   1. CONFIG — toutes les valeurs réglables au même endroit
+   ===================================================================== */
+var CFG = {
+  world: {
+    w: 140, h: 90,          // dimensions de la zone, en mètres
+    cell: 1,                // taille d'une cellule de la grille de pathfinding
+    px: 6,                  // pixels par mètre (zoom)
+    wallT: 0.6              // épaisseur des murs
+  },
+  sim: {
+    hz: 60,                 // pas de simulation fixe
+    step: 1 / 60,
+    maxStepsPerFrame: 8,    // garde-fou anti spirale de la mort
+    brainHz: 8,             // fréquence de "réflexion" d'un soldat
+    timeScales: [0.25, 0.5, 1, 2, 4]
+  },
+  player: {
+    r: 0.45,
+    hp: 100,
+    speedWalk: 4.0,
+    speedSprint: 7.2,
+    speedCrouch: 1.9,
+    accel: 26,
+    fireCd: 0.22,
+    damage: 60,
+    spread: { crouch: 0.008, stand: 0.020, sprint: 0.055 },
+    rockCd: 0.9,
+    rockSpeed: 22,
+    rockRange: 26
+  },
+  noise: {                  // rayon d'audibilité en mètres
+    gunshot: 90,
+    sprint: 14,
+    walk: 6,
+    crouch: 2,
+    rock: 25,
+    bodyFall: 8
+  },
+  vis: {                    // visibilité transmise à la perception
+    stand: 1.0,
+    sprint: 1.0,
+    crouch: 0.5,
+    crouchStill: 0.35
+  },
+  ai: {
+    radius: 0.5,
+    turnRate: 3.2,          // rad/s en patrouille
+    turnRateAlert: 6.5,     // rad/s en alerte
+    speedPatrol: 1.5,
+    speedInvestigate: 2.7,
+    speedCombat: 3.3,
+    speedFlee: 5.2,
+    accel: 14,
+    separation: 1.5,        // distance de séparation entre alliés
+    arriveDist: 0.8,
+    repathInterval: 0.75,
+    shoutRange: 15,
+    doorPause: 1.2,         // pause aux points de passage
+    searchStep: 4.5,        // incrément du rayon de fouille
+    searchMax: 24,
+    searchLegTime: 2.8,     // durée d'une jambe de fouille
+    searchGiveUp: 30,       // abandon de la fouille (s)
+    coverMaxDist: 16,
+    engageRange: 70,
+    fireRange: { militia: 40, regular: 55, sf: 65 },
+    reactionJitter: 0.4,
+    suppressedDecay: 0.35,
+    stuckTime: 1.1
+  },
+  morale: {
+    regen: 0.020,           // par seconde, au calme
+    allyDown: -0.22,        // un camarade tombe (proche)
+    allyDownRadius: 38,
+    hitTaken: -0.05,
+    suppressed: -0.030,
+    bodyFound: -0.09,
+    outnumbered: -0.05,
+    allyNear: 0.012,
+    combatOk: 0.008
+  },
+  command: {
+    decay: { COMBAT: 14, ALERT: 22, SUSPICIOUS: 30 },  // s avant de redescendre d'un cran
+    sfCombatTime: 40,       // s en COMBAT avant d'appeler les FS
+    sfDeadCount: 3,         // ou 3 morts
+    sfArrivalDelay: 25,     // délai d'arrivée des FS
+    sfEntry: { x: 135, y: 5 },
+    regularReleaseAlert: 2  // niveau ALERT
+  },
+  colors: {
+    bg: '#070a0f',
+    ground: '#0d1219',
+    grid: '#141b25',
+    wall: '#4a5768',
+    wallTop: '#5d6b7d',
+    crate: '#6b5738',
+    cover: '#2b4a63',
+    player: '#e8e8e8',
+    militia: '#d9822b',
+    regular: '#4f9be8',
+    sf: '#b06be8',
+    body: '#8c3b3b',
+    noise: '#e8d24c',
+    radio: '#5fc98a',
+    cone: 0.055,            // alpha du cône de vision
+    text: '#c9d4e2',
+    dim: '#77839a'
+  },
+  debug: {
+    on: true,
+    assertNoOmniscience: true,   // proxy de vérification autour du ctx
+    logLines: 12,
+    showCoverPoints: true,
+    showPaths: true,
+    showCones: true
+  }
+};
+
+/* =====================================================================
+   2. UTIL — math, géométrie, RNG à graine
+   ===================================================================== */
+var TAU = Math.PI * 2;
+
+var U = {
+  TAU: TAU,
+  clamp: function (v, a, b) { return v < a ? a : (v > b ? b : v); },
+  lerp: function (a, b, t) { return a + (b - a) * t; },
+  dist: function (ax, ay, bx, by) { var dx = bx - ax, dy = by - ay; return Math.sqrt(dx * dx + dy * dy); },
+  distP: function (a, b) { return U.dist(a.x, a.y, b.x, b.y); },
+  dist2: function (ax, ay, bx, by) { var dx = bx - ax, dy = by - ay; return dx * dx + dy * dy; },
+  angleDiff: function (a, b) {
+    var d = (a - b) % TAU;
+    if (d > Math.PI) d -= TAU;
+    if (d < -Math.PI) d += TAU;
+    return d;
+  },
+  /** Rotation bornée de `cur` vers `target` (rad), au plus `maxDelta`. */
+  rotTowards: function (cur, target, maxDelta) {
+    var d = U.angleDiff(target, cur);
+    if (Math.abs(d) <= maxDelta) return target;
+    return cur + (d > 0 ? maxDelta : -maxDelta);
+  },
+  /** mulberry32 : RNG 32 bits, déterministe et reproductible. */
+  mulberry32: function (seed) {
+    var a = seed >>> 0;
+    return function () {
+      a = (a + 0x6D2B79F5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  },
+  /** Segment (ax,ay)-(bx,by) contre rectangle {x,y,w,h} (méthode des dalles). */
+  segRect: function (ax, ay, bx, by, r) {
+    var dx = bx - ax, dy = by - ay;
+    var t0 = 0, t1 = 1, ta, tb, tmp;
+    if (Math.abs(dx) < 1e-9) {
+      if (ax < r.x || ax > r.x + r.w) return false;
+    } else {
+      ta = (r.x - ax) / dx; tb = (r.x + r.w - ax) / dx;
+      if (ta > tb) { tmp = ta; ta = tb; tb = tmp; }
+      if (ta > t0) t0 = ta;
+      if (tb < t1) t1 = tb;
+      if (t0 > t1) return false;
+    }
+    if (Math.abs(dy) < 1e-9) {
+      if (ay < r.y || ay > r.y + r.h) return false;
+    } else {
+      ta = (r.y - ay) / dy; tb = (r.y + r.h - ay) / dy;
+      if (ta > tb) { tmp = ta; ta = tb; tb = tmp; }
+      if (ta > t0) t0 = ta;
+      if (tb < t1) t1 = tb;
+      if (t0 > t1) return false;
+    }
+    return true;
+  },
+  pointInRect: function (px, py, r) {
+    return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+  },
+  /** Distance signée minimale d'un point à un rectangle (0 si dedans). */
+  distToRect: function (px, py, r) {
+    var dx = Math.max(r.x - px, 0, px - (r.x + r.w));
+    var dy = Math.max(r.y - py, 0, py - (r.y + r.h));
+    return Math.sqrt(dx * dx + dy * dy);
+  },
+  fmt: function (v, n) { var p = Math.pow(10, n || 0); return String(Math.round(v * p) / p); },
+  /** "±Xm" compact pour l'affichage. */
+  pm: function (v) { return '±' + Math.round(v) + 'm'; }
+};
+
+/* =====================================================================
+   3. PERCEPTION — perception.js fourni, inliné SANS AUCUNE MODIFICATION
+      de comportement ni d'API publique.
+
+   CHANGES TO perception.js (documentés, obligatoires pour le mono-fichier) :
+     1. les mots-clés `export` sont retirés;
+     2. le module est enveloppé dans une IIFE qui renvoie
+        { ContactMemory, Perception, DOCTRINE_DEFAUT }.
+        RAISON : perception.js déclare TAU / clamp / dist / angleDiff au
+        niveau supérieur, ce qui entrerait en collision (SyntaxError de
+        redéclaration de const) avec la section UTIL. L'enveloppe isole ces
+        constantes; aucune ligne de logique n'est modifiée.
+     3. `SOURCE_RANK` est également exposé (lecture seule, pour le debug).
+   ===================================================================== */
+var PERCEPTION_MOD = (function () {
+
+// perception.js — Perception + mémoire des contacts (ES module, sans dépendance)
+// Convention : plan de sol en (x, y). En 3D, mappe y -> z.
+// Le soldat ne connaît JAMAIS la vraie position du joueur : il agit sur sa mémoire.
+
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const angleDiff = (a, b) => {
+  let d = (a - b) % TAU;
+  if (d > Math.PI) d -= TAU;
+  if (d < -Math.PI) d += TAU;
+  return d;
+};
+const SOURCE_RANK = { sound: 1, radio: 2, suspicion: 1, sight: 3 };
+
+/* ------------------------------------------------------------------ */
+/* Mémoire des contacts                                                */
+/* ------------------------------------------------------------------ */
+class ContactMemory {
+  constructor(opts = {}) {
+    this.maxContacts = opts.maxContacts ?? 8;
+    this.forgetAfter = opts.forgetAfter ?? 45;      // secondes
+    this.halfLife = opts.confidenceHalfLife ?? 12;  // demi-vie de la confiance
+    this.assumedSpeed = opts.assumedSpeed ?? 2.5;   // m/s : vitesse supposée de la cible
+    this.contacts = new Map();
+  }
+
+  /** Erreur de position actuelle d'un contact (grandit avec l'âge). */
+  effectiveError(c, now) {
+    return c.posError + (now - c.lastSeen) * this.assumedSpeed * 0.5;
+  }
+
+  /** Enregistre une observation. Une info plus précise remplace une plus vague. */
+  report({ id, pos, source, confidence, posError = 0 }, now) {
+    let c = this.contacts.get(id);
+    if (!c) {
+      c = {
+        id, pos: { ...pos }, vel: { x: 0, y: 0 }, confidence, posError,
+        source, firstSeen: now, lastSeen: now, lastDirect: source === 'sight' ? now : null,
+      };
+      this.contacts.set(id, c);
+      this._evict();
+      return c;
+    }
+    if (posError <= this.effectiveError(c, now)) {
+      const dt = now - c.lastSeen;
+      if (source === 'sight' && dt > 0.1 && dt < 2) {
+        const k = 0.4; // lissage de la vitesse estimée
+        c.vel.x += ((pos.x - c.pos.x) / dt - c.vel.x) * k;
+        c.vel.y += ((pos.y - c.pos.y) / dt - c.vel.y) * k;
+      } else if (source !== 'sight') {
+        c.vel.x = 0; c.vel.y = 0;
+      }
+      c.pos = { ...pos };
+      c.posError = posError;
+      c.lastSeen = now;
+      c.confidence = Math.max(c.confidence, confidence);
+      if (SOURCE_RANK[source] >= SOURCE_RANK[c.source] || source === 'sight') c.source = source;
+      if (source === 'sight') c.lastDirect = now;
+    } else {
+      // Info moins précise : elle corrobore seulement le contact existant.
+      c.confidence = Math.min(1, c.confidence + 0.1);
+    }
+    return c;
+  }
+
+  /** À appeler à chaque tick de perception. */
+  update(now, dt) {
+    const decay = Math.pow(0.5, dt / this.halfLife);
+    const lost = [];
+    for (const [id, c] of this.contacts) {
+      // Tant que la cible est vue en direct, la confiance ne baisse pas.
+      if (c.lastSeen < now - 0.01) c.confidence *= decay;
+      if (now - c.lastSeen > this.forgetAfter || c.confidence < 0.05) {
+        this.contacts.delete(id);
+        lost.push(id);
+      }
+    }
+    return lost;
+  }
+
+  /** Position estimée + rayon d'incertitude (zone de recherche). */
+  estimate(c, now) {
+    const age = now - c.lastSeen;
+    const lead = Math.min(age, 3); // on extrapole la vitesse au plus 3 s
+    return {
+      pos: { x: c.pos.x + c.vel.x * lead, y: c.pos.y + c.vel.y * lead },
+      radius: this.effectiveError(c, now),
+      age,
+      confidence: c.confidence,
+      source: c.source,
+    };
+  }
+
+  /** Meilleur contact : confiance élevée et récente. */
+  best(now) {
+    let top = null, topScore = -1;
+    for (const c of this.contacts.values()) {
+      const score = c.confidence / (1 + (now - c.lastSeen) * 0.1);
+      if (score > topScore) { top = c; topScore = score; }
+    }
+    return top;
+  }
+
+  all() { return [...this.contacts.values()]; }
+
+  /** Rapports pour la radio : plus vagues que la mémoire locale. */
+  exportForRadio(now, maxItems = 3) {
+    return this.all()
+      .sort((a, b) => b.confidence - a.confidence)
+      .slice(0, maxItems)
+      .map((c) => {
+        const e = this.estimate(c, now);
+        return { id: c.id, pos: e.pos, posError: e.radius + 3, confidence: c.confidence };
+      });
+  }
+
+  _evict() {
+    while (this.contacts.size > this.maxContacts) {
+      let worst = null;
+      for (const c of this.contacts.values()) if (!worst || c.confidence < worst.confidence) worst = c;
+      this.contacts.delete(worst.id);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Perception                                                          */
+/* ------------------------------------------------------------------ */
+/**
+ * doctrine : paramètres propres au type d'unité (voir DOCTRINE_DEFAUT).
+ * env :
+ *   hasLineOfSight(from, to) -> bool    (raycast de ton moteur)
+ *   occlusion(from, to)      -> 0..1    (optionnel : atténuation du son par les murs)
+ *   rng()                    -> 0..1    (optionnel : pour des tests reproductibles)
+ */
+const DOCTRINE_DEFAUT = {
+  viewRange: 60,          // m
+  fov: 100,               // degrés
+  peripheralRange: 6,     // m : perception à 360° tout près
+  reactionTime: 0.8,      // s pour repérer une cible nette à courte distance
+  hearingRange: 1.0,      // multiplicateur de la portée du son
+  hearingAccuracy: 0.5,   // 0..1 : précision de localisation du son
+  suspicionThreshold: 0.4,// awareness à partir de laquelle on soupçonne
+  tickInterval: 0.15,     // s : fréquence de réflexion (pas à chaque frame !)
+};
+
+class Perception {
+  constructor(doctrine = {}, env = {}, memoryOpts = {}) {
+    this.d = { ...DOCTRINE_DEFAUT, ...doctrine };
+    this.env = env;
+    this.rng = env.rng ?? Math.random;
+    this.memory = new ContactMemory(memoryOpts);
+    this.awareness = new Map(); // id -> 0..1 (jauge de détection)
+    this._acc = this.rng() * this.d.tickInterval; // désynchronise les soldats
+  }
+
+  /**
+   * self    : { pos:{x,y}, facing:radians }
+   * targets : [{ id, pos:{x,y}, visibility:0..1 }]  (visibility : posture, lumière, camouflage)
+   * Retourne des événements : { type: 'spotted'|'suspicious'|'lost', id }
+   */
+  update(self, targets, dt, now) {
+    this._acc += dt;
+    if (this._acc < this.d.tickInterval) return [];
+    const step = this._acc;
+    this._acc = 0;
+
+    const events = this._see(self, targets, step, now);
+    for (const id of this.memory.update(now, step)) events.push({ type: 'lost', id });
+    return events;
+  }
+
+  _see(self, targets, dt, now) {
+    const d = this.d;
+    const events = [];
+    const halfFov = (d.fov * Math.PI) / 360;
+
+    for (const t of targets) {
+      const prev = this.awareness.get(t.id) ?? 0;
+      const dd = dist(self.pos, t.pos);
+      let visible = false, rate = 0;
+
+      if (dd <= d.viewRange) {
+        const ang = Math.abs(angleDiff(Math.atan2(t.pos.y - self.pos.y, t.pos.x - self.pos.x), self.facing));
+        const inCone = ang <= halfFov;
+        const inPeriph = dd <= d.peripheralRange;
+        if ((inCone || inPeriph) && this.env.hasLineOfSight?.(self.pos, t.pos) !== false) {
+          visible = true;
+          const distFactor = Math.max(0.05, 1 - (dd / d.viewRange) ** 2);
+          const angFactor = inCone ? 1 - 0.5 * (ang / halfFov) : 0.3;
+          rate = (1 / d.reactionTime) * distFactor * angFactor * clamp(t.visibility ?? 1, 0, 1);
+        }
+      }
+
+      let aw = visible ? Math.min(1, prev + rate * dt) : Math.max(0, prev - 0.5 * dt);
+      this.awareness.set(t.id, aw);
+      if (aw === 0 && !visible) this.awareness.delete(t.id);
+
+      if (aw >= 1) {
+        const known = this.memory.contacts.get(t.id);
+        const wasDirect = known && known.lastDirect !== null && now - known.lastDirect < 1;
+        this.memory.report({ id: t.id, pos: t.pos, source: 'sight', confidence: 1, posError: 0.5 }, now);
+        if (!wasDirect) events.push({ type: 'spotted', id: t.id });
+      } else if (visible && aw >= d.suspicionThreshold) {
+        // Quelque chose bouge là-bas : contact vague, pas encore confirmé.
+        const had = this.memory.contacts.has(t.id);
+        this.memory.report({
+          id: t.id, pos: t.pos, source: 'suspicion',
+          confidence: aw * 0.6, posError: 2 + dd * 0.3,
+        }, now);
+        if (!had) events.push({ type: 'suspicious', id: t.id });
+      }
+    }
+    return events;
+  }
+
+  /**
+   * sound : { pos, loudness (rayon en m), kind: 'gunshot'|'footstep'|'explosion'|..., sourceId? }
+   * Retourne le contact mis à jour, ou null si le son n'est pas entendu.
+   */
+  hear(self, sound, now) {
+    const d = this.d;
+    const occl = this.env.occlusion?.(self.pos, sound.pos) ?? 1;
+    const range = sound.loudness * d.hearingRange * clamp(occl, 0, 1);
+    const dd = dist(self.pos, sound.pos);
+    if (dd > range) return null;
+
+    // Plus le son est loin, moins la localisation est précise.
+    const posError = 1 + dd * 0.3 * (1 - d.hearingAccuracy);
+    const ang = this.rng() * TAU;
+    const off = this.rng() * posError;
+    const pos = { x: sound.pos.x + Math.cos(ang) * off, y: sound.pos.y + Math.sin(ang) * off };
+    const confidence = clamp(0.3 + 0.5 * (1 - dd / range), 0, 0.8);
+
+    return this.memory.report({
+      id: sound.sourceId ?? `inconnu:${sound.kind}`,
+      pos, source: 'sound', confidence, posError,
+    }, now);
+  }
+
+  /** Message radio d'un allié : info de seconde main, dégradée. */
+  receiveRadio(msg, now) {
+    return this.memory.report({
+      id: msg.id, pos: msg.pos, source: 'radio',
+      confidence: msg.confidence * 0.7, posError: (msg.posError ?? 0) + 5,
+    }, now);
+  }
+}
+
+return { ContactMemory: ContactMemory, Perception: Perception, DOCTRINE_DEFAUT: DOCTRINE_DEFAUT, SOURCE_RANK: SOURCE_RANK };
+})();
+
+var ContactMemory = PERCEPTION_MOD.ContactMemory;
+var Perception = PERCEPTION_MOD.Perception;
+var DOCTRINE_DEFAUT = PERCEPTION_MOD.DOCTRINE_DEFAUT;
+
+/* =====================================================================
+   4. WORLD — murs, ligne de vue, occlusion, grille, A*, couverture
+   ===================================================================== */
+var World = {
+  walls: [],          // rectangles bloquants {x,y,w,h,kind}
+  cover: [],          // points de couverture {x,y,nx,ny,i}
+  gw: 0, gh: 0, cell: 1,
+  blocked: null,      // Uint8Array de la grille (gonflée du rayon d'un agent)
+  _pathTmp: [],
+
+  reset: function () {
+    this.walls.length = 0;
+    this.cover.length = 0;
+  },
+
+  /** Mur porteur : segment (x0,y0)-(x1,y1) axe-aligné, épaisseur t. */
+  addWall: function (x0, y0, x1, y1, kind, t) {
+    t = t || CFG.world.wallT;
+    var r;
+    if (Math.abs(x1 - x0) < 1e-6) {                  // vertical
+      r = { x: x0 - t / 2, y: Math.min(y0, y1), w: t, h: Math.abs(y1 - y0) };
+    } else {                                          // horizontal
+      r = { x: Math.min(x0, x1), y: y0 - t / 2, w: Math.abs(x1 - x0), h: t };
+    }
+    r.kind = kind || 'wall';
+    r.x0 = x0; r.y0 = y0; r.x1 = x1; r.y1 = y1;
+    this.walls.push(r);
+    return r;
+  },
+
+  /** Bloc plein (caisses, rochers). */
+  addBlock: function (x, y, w, h, kind) {
+    var r = { x: x, y: y, w: w, h: h, kind: kind || 'block' };
+    this.walls.push(r);
+    return r;
+  },
+
+  /** Construit la grille de navigation et les points de couverture. */
+  build: function () {
+    this.cell = CFG.world.cell;
+    this.gw = Math.ceil(CFG.world.w / this.cell);
+    this.gh = Math.ceil(CFG.world.h / this.cell);
+    this.blocked = new Uint8Array(this.gw * this.gh);
+    var rad = CFG.ai.radius + 0.05;
+    for (var cy = 0; cy < this.gh; cy++) {
+      for (var cx = 0; cx < this.gw; cx++) {
+        var x = (cx + 0.5) * this.cell, y = (cy + 0.5) * this.cell;
+        this.blocked[cy * this.gw + cx] = this.pointBlocked(x, y, rad) ? 1 : 0;
+      }
+    }
+    this.buildCover();
+    this.astarInit(this.gw * this.gh);
+  },
+
+  cellBlocked: function (cx, cy) {
+    if (cx < 0 || cy < 0 || cx >= this.gw || cy >= this.gh) return true;
+    return this.blocked[cy * this.gw + cx] === 1;
+  },
+
+  /** Un point est-il libre pour un agent de rayon r ? */
+  pointBlocked: function (x, y, r) {
+    for (var i = 0; i < this.walls.length; i++) {
+      var w = this.walls[i];
+      if (x > w.x - r && x < w.x + w.w + r && y > w.y - r && y < w.y + w.h + r) return true;
+    }
+    return false;
+  },
+  isFree: function (x, y, r) {
+    if (x < 0.5 || y < 0.5 || x > CFG.world.w - 0.5 || y > CFG.world.h - 0.5) return false;
+    return !this.pointBlocked(x, y, r === undefined ? CFG.ai.radius : r);
+  },
+
+  /** Ligne de vue stricte (segment vs murs). */
+  hasLineOfSight: function (a, b) {
+    for (var i = 0; i < this.walls.length; i++) {
+      if (U.segRect(a.x, a.y, b.x, b.y, this.walls[i])) return false;
+    }
+    return true;
+  },
+
+  /** Segment suffisamment dégagé pour un agent de rayon r (lissage de chemin). */
+  segmentClear: function (a, b, r) {
+    var pad = { x: 0, y: 0, w: 0, h: 0 };
+    for (var i = 0; i < this.walls.length; i++) {
+      var w = this.walls[i];
+      pad.x = w.x - r; pad.y = w.y - r; pad.w = w.w + 2 * r; pad.h = w.h + 2 * r;
+      if (U.segRect(a.x, a.y, b.x, b.y, pad)) return false;
+    }
+    return true;
+  },
+
+  /** Atténuation sonore : 1 - 0.45 par mur traversé (plancher à 0). */
+  occlusion: function (a, b) {
+    var n = 0;
+    for (var i = 0; i < this.walls.length; i++) {
+      if (U.segRect(a.x, a.y, b.x, b.y, this.walls[i])) n++;
+    }
+    return Math.max(0, 1 - 0.45 * n);
+  },
+
+  /** Distance du mur le plus proche (0 si à l'intérieur d'un mur). */
+  clearance: function (x, y) {
+    var best = 1e9;
+    for (var i = 0; i < this.walls.length; i++) {
+      var d = U.distToRect(x, y, this.walls[i]);
+      if (d < best) best = d;
+    }
+    return best;
+  },
+
+  /* ---- points de couverture ---------------------------------------- */
+  buildCover: function () {
+    this.cover.length = 0;
+    var pad = CFG.ai.radius + 0.42;   // on se colle contre la surface
+    var step = 2.5;
+    var seen = Object.create(null);
+    var self = this;
+    function push(x, y, nx, ny) {
+      if (x < 1 || y < 1 || x > CFG.world.w - 1 || y > CFG.world.h - 1) return;
+      if (self.pointBlocked(x, y, CFG.ai.radius * 0.9)) return;
+      var key = (Math.round(x * 2) / 2) + ':' + (Math.round(y * 2) / 2);
+      if (seen[key]) return;
+      seen[key] = 1;
+      self.cover.push({
+        x: x, y: y, nx: nx, ny: ny, i: self.cover.length,
+        open: self.clearance(x, y)
+      });
+    }
+    for (var i = 0; i < this.walls.length; i++) {
+      var w = this.walls[i];
+      var x, y;
+      for (x = w.x + 0.4; x <= w.x + w.w - 0.2; x += step) {       // côté nord
+        push(x, w.y - pad, 0, -1);
+        push(x, w.y + w.h + pad, 0, 1);                            // côté sud
+      }
+      for (y = w.y + 0.4; y <= w.y + w.h - 0.2; y += step) {       // côté ouest
+        push(w.x - pad, y, -1, 0);
+        push(w.x + w.w + pad, y, 1, 0);                            // côté est
+      }
+    }
+    // Quelques points de couverture "ouverts" (zone de départ du joueur)
+    for (i = 0; i < this.cover.length; i++) this.cover[i].i = i;
+  },
+
+  /**
+   * Score d'un point de couverture face à une menace estimée.
+   * mode 'hide' : on veut être masqué. mode 'fire' : on veut pouvoir tirer.
+   * Plus c'est haut, mieux c'est.
+   */
+  coverScore: function (cp, selfPos, threatPos, opts) {
+    opts = opts || {};
+    var mode = opts.mode || 'hide';
+    var maxDist = opts.maxDist || CFG.ai.coverMaxDist;
+    var dSelf = U.dist(selfPos.x, selfPos.y, cp.x, cp.y);
+    if (dSelf > maxDist) return -1e9;
+    var dThreat = U.dist(threatPos.x, threatPos.y, cp.x, cp.y);
+    if (opts.minThreatDist && dThreat < opts.minThreatDist) return -1e9;
+
+    // point légèrement décalé du mur = position réelle du tireur accroupi
+    var stand = { x: cp.x, y: cp.y };
+    var los = this.hasLineOfSight(stand, threatPos);
+
+    var score = 0;
+    if (mode === 'hide') {
+      score += los ? 0 : 2.4;                                   // masqué = excellent
+      score += 1.0 * (1 - dSelf / maxDist);                     // proche de soi
+      score += dThreat < 6 ? -1.2 : 0;                          // pas trop près de la menace
+    } else {
+      score += los ? 1.9 : -1.0;                                // il faut une ligne de tir
+      score += 1.0 * (1 - dSelf / maxDist);
+      var pref = opts.preferredRange || 16;
+      score += 0.8 * (1 - Math.min(1, Math.abs(dThreat - pref) / pref));
+    }
+    // "pas à découvert" : un point de couverture doit coller à un obstacle
+    score += cp.open > 1.6 ? -1.5 : 0;
+    // pénalité si un allié l'occupe déjà (évite les paquets)
+    if (opts.occupied) {
+      for (var i = 0; i < opts.occupied.length; i++) {
+        var o = opts.occupied[i];
+        if (U.dist2(o.x, o.y, cp.x, cp.y) < 4) { score -= 0.9; break; }
+      }
+    }
+    return score;
+  },
+
+  /** Meilleur point de couverture, ou null. */
+  findCover: function (selfPos, threatPos, opts) {
+    opts = opts || {};
+    var best = null, bestScore = -1e9;
+    for (var i = 0; i < this.cover.length; i++) {
+      var cp = this.cover[i];
+      var s = this.coverScore(cp, selfPos, threatPos, opts);
+      if (s > bestScore) { bestScore = s; best = cp; }
+    }
+    if (!best || bestScore < -1e8) return null;
+    return best;
+  },
+
+  /* ---- A* sur grille ----------------------------------------------- */
+  astarInit: function (n) {
+    this._g = new Float32Array(n);
+    this._f = new Float32Array(n);
+    this._came = new Int32Array(n);
+    this._stamp = new Int32Array(n);
+    this._closed = new Uint8Array(n);
+    this._heap = [0];            // tas binaire (tableau simple : il peut grossir)
+    this._heapLen = 0;
+    this._gen = 0;
+  },
+  _hpush: function (idx) {
+    var h = this._heap, f = this._f;
+    var i = ++this._heapLen;
+    h[i] = idx;
+    while (i > 1) {
+      var p = i >> 1;
+      if (f[h[p]] <= f[h[i]]) break;
+      var t = h[p]; h[p] = h[i]; h[i] = t;
+      i = p;
+    }
+  },
+  _hpop: function () {
+    var h = this._heap, f = this._f;
+    var top = h[1];
+    h[1] = h[this._heapLen--];
+    var i = 1;
+    for (;;) {
+      var l = i << 1, r = l + 1, m = i;
+      if (l <= this._heapLen && f[h[l]] < f[h[m]]) m = l;
+      if (r <= this._heapLen && f[h[r]] < f[h[m]]) m = r;
+      if (m === i) break;
+      var t = h[m]; h[m] = h[i]; h[i] = t;
+      i = m;
+    }
+    return top;
+  },
+
+  /** A* : renvoie un tableau de points monde, ou null si aucun chemin. */
+  findPath: function (sx, sy, gx, gy) {
+    var c = this.cell;
+    var s = this.nearestFreeCell(sx, sy);
+    var g = this.nearestFreeCell(gx, gy);
+    if (!s || !g) return null;
+    var start = s.y * this.gw + s.x, goal = g.y * this.gw + g.x;
+    if (start === goal) return [{ x: gx, y: gy }];
+
+    var gen = ++this._gen;
+    var G = this._g, F = this._f, came = this._came, stamp = this._stamp, closed = this._closed;
+    this._heapLen = 0;
+
+    stamp[start] = gen; G[start] = 0;
+    F[start] = U.dist(s.x, s.y, g.x, g.y);
+    came[start] = -1; closed[start] = 0;
+    this._hpush(start);
+
+    var gxi = g.x, gyi = g.y;
+    var found = false, guard = 0, limit = this.gw * this.gh * 4;
+    var DX = [1, -1, 0, 0, 1, 1, -1, -1], DY = [0, 0, 1, -1, 1, -1, 1, -1];
+
+    while (this._heapLen > 0 && guard++ < limit) {
+      var cur = this._hpop();
+      if (cur === goal) { found = true; break; }
+      if (closed[cur] === 1 && stamp[cur] === gen) continue;
+      closed[cur] = 1;
+      var cx = cur % this.gw, cy = (cur - cx) / this.gw;
+      for (var k = 0; k < 8; k++) {
+        var nx = cx + DX[k], ny = cy + DY[k];
+        if (nx < 0 || ny < 0 || nx >= this.gw || ny >= this.gh) continue;
+        if (this.blocked[ny * this.gw + nx]) continue;
+        if (k >= 4) {   // pas de coupe de coin
+          if (this.blocked[cy * this.gw + nx] || this.blocked[ny * this.gw + cx]) continue;
+        }
+        var ni = ny * this.gw + nx;
+        var cost = G[cur] + (k >= 4 ? 1.4142 : 1);
+        if (stamp[ni] !== gen) {
+          stamp[ni] = gen; closed[ni] = 0; G[ni] = Infinity; came[ni] = -1;
+        }
+        if (closed[ni] === 1) continue;
+        if (cost < G[ni]) {
+          G[ni] = cost;
+          came[ni] = cur;
+          var dx = Math.abs(nx - gxi), dy = Math.abs(ny - gyi);
+          F[ni] = cost + (dx > dy ? dx + 0.4142 * dy : dy + 0.4142 * dx);
+          this._hpush(ni);
+        }
+      }
+    }
+    if (!found) return null;
+
+    // reconstruction
+    var out = [];
+    var node = goal, safety = 0;
+    while (node !== -1 && safety++ < 10000) {
+      var x = node % this.gw, y = (node - x) / this.gw;
+      out.push({ x: (x + 0.5) * c, y: (y + 0.5) * c });
+      if (node === start) break;
+      node = came[node];
+    }
+    out.reverse();
+    out.push({ x: gx, y: gy });
+    return this.smoothPath(out, CFG.ai.radius * 0.9);
+  },
+
+  /** Lissage par "string pulling" : on saute les nœuds inutiles. */
+  smoothPath: function (pts, r) {
+    r = r === undefined ? CFG.ai.radius * 0.9 : r;
+    if (!pts || pts.length < 2) return pts;
+    var out = [pts[0]];
+    var i = 0;
+    while (i < pts.length - 1) {
+      var j = pts.length - 1;
+      for (; j > i + 1; j--) {
+        if (this.segmentClear(pts[i], pts[j], r)) break;
+      }
+      out.push(pts[j]);
+      i = j;
+    }
+    return out;
+  },
+
+  nearestFreeCell: function (x, y) {
+    var cx = U.clamp(Math.floor(x / this.cell), 0, this.gw - 1);
+    var cy = U.clamp(Math.floor(y / this.cell), 0, this.gh - 1);
+    if (!this.cellBlocked(cx, cy)) return { x: cx, y: cy };
+    for (var r = 1; r < 14; r++) {
+      for (var dy = -r; dy <= r; dy++) {
+        for (var dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+          var nx = cx + dx, ny = cy + dy;
+          if (nx < 0 || ny < 0 || nx >= this.gw || ny >= this.gh) continue;
+          if (!this.cellBlocked(nx, ny)) return { x: nx, y: ny };
+        }
+      }
+    }
+    return null;
+  },
+
+  /** Point libre le plus proche (coordonnées monde). */
+  nearestFree: function (x, y) {
+    var c = this.nearestFreeCell(x, y);
+    if (!c) return { x: x, y: y };
+    return { x: (c.x + 0.5) * this.cell, y: (c.y + 0.5) * this.cell };
+  },
+
+  /** Point aléatoire libre dans une zone (pour la fouille). */
+  randomFreeNear: function (x, y, radius, rng, tries) {
+    tries = tries || 12;
+    for (var i = 0; i < tries; i++) {
+      var a = rng() * TAU, d = Math.sqrt(rng()) * radius;
+      var px = U.clamp(x + Math.cos(a) * d, 1, CFG.world.w - 1);
+      var py = U.clamp(y + Math.sin(a) * d, 1, CFG.world.h - 1);
+      if (this.isFree(px, py)) return { x: px, y: py };
+    }
+    return { x: U.clamp(x, 1, CFG.world.w - 1), y: U.clamp(y, 1, CFG.world.h - 1) };
+  },
+
+  /** Résout la collision cercle/rectangles (pousse le corps dehors). */
+  resolveCircle: function (p, r) {
+    for (var iter = 0; iter < 3; iter++) {
+      var moved = false;
+      for (var i = 0; i < this.walls.length; i++) {
+        var w = this.walls[i];
+        var nx = U.clamp(p.x, w.x, w.x + w.w);
+        var ny = U.clamp(p.y, w.y, w.y + w.h);
+        var dx = p.x - nx, dy = p.y - ny;
+        var d2 = dx * dx + dy * dy;
+        if (d2 < r * r) {
+          moved = true;
+          if (d2 > 1e-8) {
+            var d = Math.sqrt(d2);
+            p.x = nx + (dx / d) * r;
+            p.y = ny + (dy / d) * r;
+          } else {
+            // centre à l'intérieur du mur : on pousse vers le bord le plus proche
+            var dl = p.x - w.x, dr = (w.x + w.w) - p.x, dt2 = p.y - w.y, db = (w.y + w.h) - p.y;
+            var m = Math.min(dl, dr, dt2, db);
+            if (m === dl) p.x = w.x - r;
+            else if (m === dr) p.x = w.x + w.w + r;
+            else if (m === dt2) p.y = w.y - r;
+            else p.y = w.y + w.h + r;
+          }
+        }
+      }
+      if (!moved) break;
+    }
+    p.x = U.clamp(p.x, r, CFG.world.w - r);
+    p.y = U.clamp(p.y, r, CFG.world.h - r);
+    return p;
+  }
+};
+
+/* =====================================================================
+   5. DOCTRINES — données uniquement
+   Valeurs de base imposées par le cahier des charges, auxquelles
+   l'Architecte ajoute des champs de COMPORTEMENT (repérés "+A") pour que
+   les différences se voient dans l'action, pas seulement dans la visée :
+     hearingRange, tickInterval, hp, fireCd, burst, damage, maxFireRange,
+     searchTime (ténacité de fouille), squadSpacing (espacement), reload.
+   ===================================================================== */
+var DOCTRINES = {
+  militia: {
+    key: 'militia', label: 'Milice', squad: 'M', color: CFG.colors.militia,
+    // --- valeurs imposées ---
+    reactionTime: 1.6, viewRange: 45, fov: 90, hearingAccuracy: 0.3,
+    accuracy: 0.35, discipline: 0.3, coordination: 0.2,
+    morale0: 0.6, flee: 0.45, coverUse: 0.3, aggression: 0.7,
+    radioMin: 2, radioMax: 4, radioLoss: 0.25,
+    // --- ajouts Architecte ---
+    hearingRange: 0.9, tickInterval: 0.16, hp: 90, fireCd: 1.15, burst: 2,
+    damage: 8, maxFireRange: 40, searchTime: 16, squadSpacing: 1.0, reload: 3.2
+  },
+  regular: {
+    key: 'regular', label: 'Réguliers', squad: 'R', color: CFG.colors.regular,
+    reactionTime: 0.9, viewRange: 55, fov: 100, hearingAccuracy: 0.5,
+    accuracy: 0.55, discipline: 0.7, coordination: 0.6,
+    morale0: 0.8, flee: 0.25, coverUse: 0.7, aggression: 0.5,
+    radioMin: 1, radioMax: 2, radioLoss: 0.05,
+    hearingRange: 1.0, tickInterval: 0.13, hp: 100, fireCd: 0.8, burst: 3,
+    damage: 9, maxFireRange: 55, searchTime: 26, squadSpacing: 2.4, reload: 2.6
+  },
+  sf: {
+    key: 'sf', label: 'Forces spéciales', squad: 'S', color: CFG.colors.sf,
+    reactionTime: 0.4, viewRange: 65, fov: 110, hearingAccuracy: 0.8,
+    accuracy: 0.75, discipline: 0.95, coordination: 0.95,
+    morale0: 0.95, flee: 0.10, coverUse: 0.95, aggression: 0.6,
+    radioMin: 0.3, radioMax: 0.8, radioLoss: 0,
+    hearingRange: 1.15, tickInterval: 0.10, hp: 115, fireCd: 0.5, burst: 3,
+    damage: 11, maxFireRange: 65, searchTime: 34, squadSpacing: 4.5, reload: 2.2
+  }
+};
+
+/** Libellés français des états, pour le debug. */
+var STATE_LABEL = {
+  PATROL: 'PATROUILLE', SUSPICIOUS: 'SUSPICIEUX', INVESTIGATE: 'ENQUÊTE',
+  ENGAGE: 'ENGAGEMENT', TAKE_COVER: 'COUVERT', SUPPRESS: 'SUPPRESSION',
+  FLANK: 'FLANQUEMENT', SEARCH: 'RECHERCHE', RETREAT: 'REPLI',
+  FLEE: 'PANIQUE', CHECK_BODY: 'CORPS', DEAD: 'MORT'
+};
+
+/* =====================================================================
+   6. RADIO — bus de messages, délais, pertes, information dégradée
+   Un message : { from, to:'squad'|'command'|'all', kind, id, pos,
+                  posError, confidence, text, born, deliverAt }
+   Le cri (shout) est instantané, sans dégradation, portée 15 m.
+   ===================================================================== */
+var RADIO_CMD_MARKER = { x: 125, y: 65 };   // poste de commandement (caserne)
+
+var Radio = {
+  queue: [], sent: 0, lost: 0,
+
+  reset: function () { this.queue.length = 0; this.sent = 0; this.lost = 0; },
+
+  /** Dépose un message : il sera livré après le délai de la doctrine. */
+  send: function (msg, now) {
+    var d = msg.from.d;
+    msg.born = now;
+    msg.deliverAt = now + d.radioMin + (d.radioMax - d.radioMin) * G.rng();
+    msg.relayed = !!msg.relayed;
+    this.queue.push(msg);
+    this.sent++;
+    return msg;
+  },
+
+  update: function (now) {
+    for (var i = this.queue.length - 1; i >= 0; i--) {
+      var m = this.queue[i];
+      if (now >= m.deliverAt) {
+        this.queue.splice(i, 1);
+        this.deliver(m, now);
+      }
+    }
+  },
+
+  /** Un destinataire sur deux peut perdre le message (probabilité doctrine). */
+  deliver: function (m, now) {
+    var d = m.from.d;
+    var recips = [];
+    if (m.to === 'command') {
+      recips.push(null);                       // null = le commandement
+    } else if (m.to === 'squad') {
+      var sq = G.squads[m.from.squadId];
+      if (sq) {
+        for (var i = 0; i < sq.members.length; i++) {
+          var r = sq.members[i];
+          if (r !== m.from && r.alive) recips.push(r);
+        }
+      }
+    } else { // 'all'
+      for (var j = 0; j < G.soldiers.length; j++) {
+        var s2 = G.soldiers[j];
+        if (s2 !== m.from && s2.alive && s2.released) recips.push(s2);
+      }
+      recips.push(null);
+    }
+
+    for (var k = 0; k < recips.length; k++) {
+      var rc = recips[k];
+      if (rc === null) {
+        // Le commandement reçoit toujours (c'est le destinataire nominal),
+        // mais l'information reste dégradée et datée.
+        Command.report(m.kind, { pos: m.pos, posError: m.posError, by: m.from, at: now }, now);
+        G.radioFx.push({ a: { x: m.from.pos.x, y: m.from.pos.y },
+                         b: { x: RADIO_CMD_MARKER.x, y: RADIO_CMD_MARKER.y },
+                         text: 'CMD: ' + m.text, born: now, ttl: 1.6, lost: false });
+        continue;
+      }
+      if (G.rng() < d.radioLoss) {
+        this.lost++;
+        G.radioFx.push({ a: { x: m.from.pos.x, y: m.from.pos.y },
+                         b: { x: rc.pos.x, y: rc.pos.y },
+                         text: 'perdu', born: now, ttl: 1.0, lost: true });
+        logEvent('RADIO ' + m.from.id + '→' + rc.id + ' : message perdu');
+        continue;
+      }
+      // L'info radio arrive dégradée : erreur de position + bruit de placement
+      var pe = (m.posError || 0) + 5;
+      var a = G.rng() * TAU, off = G.rng() * (m.posError || 2) * 0.6;
+      var pos = { x: m.pos.x + Math.cos(a) * off, y: m.pos.y + Math.sin(a) * off };
+      // Perception.receiveRadio dégrade l'information (confiance ×0,7, erreur +5 m)
+      rc.perception.receiveRadio({ id: m.id, pos: pos, posError: m.posError, confidence: m.confidence }, now);
+      rc.lastRadioAt = now;
+      rc.lastStimulusAt = now;
+      G.radioFx.push({ a: { x: m.from.pos.x, y: m.from.pos.y },
+                       b: { x: rc.pos.x, y: rc.pos.y },
+                       text: m.text, born: now, ttl: 1.4, lost: false });
+      logEvent('RADIO ' + m.from.id + '→' + rc.id + ' : ' + m.text);
+
+      // Relais : une milice oublie souvent de faire remonter l'info.
+      if (m.kind === 'contact' && !m.relayed && now - rc.lastRelayAt > 4) {
+        var relayProb = 0.35 + 0.5 * rc.d.discipline;
+        if (G.rng() < relayProb) {
+          rc.lastRelayAt = now;
+          this.send({
+            from: rc, to: 'command', kind: m.kind, id: m.id,
+            pos: { x: pos.x, y: pos.y }, posError: pe + 2,
+            confidence: m.confidence * 0.8, relayed: true,
+            text: 'relais ' + m.text
+          }, now);
+        }
+      }
+    }
+  },
+
+  /** Cri : portée 15 m, instantané, information non dégradée. */
+  shout: function (from, text, now) {
+    if (now - from.lastShoutAt < 2.5) return false;
+    from.lastShoutAt = now;
+    var n = 0;
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var s = G.soldiers[i];
+      if (s === from || !s.alive || !s.released) continue;
+      if (U.distP(s.pos, from.pos) > CFG.ai.shoutRange) continue;
+      s.memory.report({
+        id: 'intrus',
+        pos: { x: from.lastThreatPos ? from.lastThreatPos.x : from.pos.x,
+               y: from.lastThreatPos ? from.lastThreatPos.y : from.pos.y },
+        source: 'radio', confidence: 0.7, posError: 3
+      }, now);
+      s.lastStimulusAt = now;
+      if (worldHasLos(s.pos, from.pos)) {
+        G.radioFx.push({ a: { x: from.pos.x, y: from.pos.y }, b: { x: s.pos.x, y: s.pos.y },
+                         text: text, born: now, ttl: 1.2, lost: false });
+      }
+      n++;
+    }
+    if (n > 0) logEvent(from.id + ' crie : "' + text + '" (' + n + ' à portée)');
+    return n > 0;
+  }
+};
+
+/* Petit cache pour éviter de répéter World.hasLineOfSight dans les boucles. */
+function worldHasLos(a, b) { return World.hasLineOfSight(a, b); }
+
+/* =====================================================================
+   7. SOLDAT + CERVEAU
+
+   CHOIX D'ARCHITECTURE (3 lignes, imposé) :
+   Machine à états hiérarchique (HSM) plutôt que behavior tree :
+   (1) la réaction tactique est une histoire d'états exclusifs avec des
+       transitions rares et datées, ce que la HSM exprime nativement;
+   (2) chaque état porte ses propres timers/compteurs, ce qui rend le
+       debug trivial (un seul libellé par soldat) et le coût O(1) par tick;
+   (3) la priorité "survie > corps > menace > rôle > patrouille" se lit
+       comme une cascade de transitions, pas comme un arbre à élaguer.
+
+   Le cerveau renvoie une INTENTION ; le moteur (section 10) l'exécute.
+   ===================================================================== */
+
+function makeIntent() {
+  return {
+    state: 'PATROL', move: null, usePath: true, speed: 0, crouch: false,
+    face: null, fire: false, aim: null, aimQuality: 0.5, note: ''
+  };
+}
+function resetIntent(it) {
+  it.move = null; it.usePath = true; it.speed = 0; it.crouch = false;
+  it.face = null; it.fire = false; it.aim = null; it.aimQuality = 0.5; it.note = '';
+}
+
+function Soldier(o) {
+  this.id = o.id;
+  this.name = o.id;
+  this.squadId = o.squadId;
+  this.doctrineKey = o.doctrine;
+  this.d = DOCTRINES[o.doctrine];
+  this.color = this.d.color;
+
+  this.pos = { x: o.x, y: o.y };
+  this.vel = { x: 0, y: 0 };
+  this.facing = o.facing || 0;
+  this.facing0 = this.facing;
+  this.phase = G.rng() * TAU;
+
+  this.hp = this.d.hp;
+  this.maxHp = this.d.hp;
+  this.alive = true;
+  this.morale = this.d.morale0;
+
+  this.state = 'PATROL';
+  this.prevState = 'PATROL';
+  this.stateTime = 0;
+
+  this.home = { x: o.x, y: o.y };
+  this.rally = o.rally ? { x: o.rally.x, y: o.rally.y } : { x: o.x, y: o.y };
+  this.waypoints = o.waypoints || null;
+  this.wpIndex = 0;
+  this.isStatic = !!o.isStatic;
+  this.waitTimer = 0;
+  this.released = o.released !== false;
+
+  this.perception = new Perception(this.d, PerceptionEnv, {});
+  this.memory = this.perception.memory;
+  this.intent = makeIntent();
+
+  this.path = null; this.pathIdx = 0; this.pathGoal = null; this.repathTimer = 0;
+  this.orders = { role: 'none', objective: null, holdFire: false, moveNow: true };
+
+  this.flankSide = 1; this.flankPoint = null; this.flankTimer = 0;
+  this.coverPoint = null; this.coverTimer = 0;
+  this.searchOrigin = null; this.searchTarget = null; this.searchRadius = 3;
+  this.searchAngle = 0; this.searchLeg = 0; this.searchTimeout = 20;
+  this.bodyTarget = null; this.reachedBody = false; this.bodyCheckTime = 2;
+
+  this.target = null;
+  this.reactAt = -999;
+  this.lastStimulusAt = -999;
+  this.stimulusKind = '';
+  this.newStimulus = false;
+  this.suspWait = 1.2;
+  this.suppressDuration = 3;
+  this.suppressUntil = -999;
+
+  this.suppression = 0;
+  this.fireCd = 0; this.burstLeft = 0; this.burstTimer = 0;
+  this.reloading = false; this.reloadTimer = 0;
+  this.lastDamageAt = -999;
+
+  this.bodyAware = new Map();     // id de corps -> 0..1 (jauge de découverte)
+  this.pendingBodies = [];
+  this.lastThreatPos = null;
+
+  this.lastRadioAt = -999; this.lastRelayAt = -999; this.lastShoutAt = -999;
+  this.brainAcc = G.rng() / CFG.sim.brainHz;   // désynchronise les soldats
+  this.stuck = 0;
+  this.sidestepTimer = 0; this.sidestepDir = 1;
+  this.lastAim = null; this.lastQuality = 0.4;
+  this.lastSightAt = -999;      // dernière fois où il a RÉELLEMENT vu la cible
+
+  this._ctx = null; this._ctxProxy = null;
+  this._selfCache = null;
+  this._allyPositions = [];
+}
+
+Soldier.prototype.hurt = function (amount, now, byId) {
+  if (!this.alive) return;
+  this.hp -= amount;
+  this.lastDamageAt = now;
+  this.morale = U.clamp(this.morale + CFG.morale.hitTaken, 0, 1);
+  this.suppression = Math.min(1, this.suppression + 0.35);
+  if (this.hp <= 0) this.die(now, byId);
+};
+
+Soldier.prototype.die = function (now, byId) {
+  if (!this.alive) return;
+  this.alive = false;
+  this.hp = 0;
+  this.state = 'DEAD';
+  this.deadAt = now;
+  this.path = null;
+  G.bodies.push({
+    id: 'corps:' + this.id, of: this.id, squadId: this.squadId,
+    pos: { x: this.pos.x, y: this.pos.y }, at: now, found: false, foundBy: {}
+  });
+  Combat.emitSound(this.pos, CFG.noise.bodyFall, 'bodyFall', 'ami:chute', now);
+  logEvent(this.id + ' neutralisé' + (byId ? ' par ' + byId : ''));
+
+  // Le moral des camarades proches chute (rayon de la config).
+  for (var i = 0; i < G.soldiers.length; i++) {
+    var s = G.soldiers[i];
+    if (!s.alive || s === this) continue;
+    var dd = U.distP(s.pos, this.pos);
+    if (dd < CFG.morale.allyDownRadius) {
+      var aware = (s.squadId === this.squadId) ? 1 : 0.5;
+      s.morale = U.clamp(s.morale + CFG.morale.allyDown * aware * (1 - dd / CFG.morale.allyDownRadius), 0, 1);
+    }
+  }
+  var sq = G.squads[this.squadId];
+  if (sq) sq.onDeath(this, now);
+  Command.onEnemyDown(now);
+};
+
+/* --- construction du ctx : AUCUNE référence au joueur ---------------- */
+var PerceptionEnv = {
+  hasLineOfSight: function (a, b) { return World.hasLineOfSight(a, b); },
+  occlusion: function (a, b) { return World.occlusion(a, b); },
+  rng: function () { return G.rng(); }
+};
+
+function buildCtx(s, now, dt) {
+  var c = s._ctx;
+  if (!c) {
+    c = s._ctx = {};
+    c.self = {
+      id: s.id, squadId: s.squadId, pos: s.pos, facing: 0, hp: 0, maxHp: 0,
+      morale: 0, alive: true, state: '', stateTime: 0, doctrine: s.d,
+      orders: s.orders, suppression: 0, released: true
+    };
+    c.world = {
+      hasLineOfSight: function (a, b) { return World.hasLineOfSight(a, b); },
+      occlusion: function (a, b) { return World.occlusion(a, b); },
+      isFree: function (x, y, r) { return World.isFree(x, y, r); },
+      nearestFree: function (x, y) { return World.nearestFree(x, y); },
+      findCover: function (selfPos, threatPos, opts) { return World.findCover(selfPos, threatPos, opts); },
+      clearance: function (x, y) { return World.clearance(x, y); },
+      w: CFG.world.w, h: CFG.world.h
+    };
+    c.radio = {
+      send: function (msg, t) { msg.from = s; return Radio.send(msg, t); },
+      shout: function (text, t) {
+        if (s.lastThreat) {
+          s.lastThreatPos = { x: s.lastThreat.pos.x, y: s.lastThreat.pos.y };
+        }
+        return Radio.shout(s, text, t);
+      }
+    };
+    c.rng = function () { return G.rng(); };
+    c.log = function (text) { logEvent(s.id + ': ' + text); };
+    c.squadInfo = { alive: 0, allyPositions: [], objective: null, syncAt: 0, rally: null, shared: null };
+    c.command = { level: 0, levelName: 'CALM', reportedPos: null, reportedAt: -999 };
+    c.bodies = [];
+  }
+
+  c.now = now;
+  c.dt = dt;
+  c.memory = s.memory;
+
+  var self = c.self;
+  self.facing = s.facing; self.hp = s.hp; self.maxHp = s.maxHp;
+  self.morale = s.morale; self.alive = s.alive; self.state = s.state;
+  self.stateTime = s.stateTime; self.suppression = s.suppression;
+  self.released = s.released;
+  self.orders = s.orders;
+
+  var sq = G.squads[s.squadId];
+  c.squad = sq || null;
+  var si = c.squadInfo;
+  si.alive = 0;
+  si.allyPositions.length = 0;
+  if (sq) {
+    for (var i = 0; i < sq.members.length; i++) {
+      var m = sq.members[i];
+      if (!m.alive || m === s) continue;
+      si.alive++;
+      si.allyPositions.push(m.pos);
+    }
+    si.objective = sq.objective;
+    si.syncAt = sq.syncAt;
+    si.rally = sq.rally;
+    si.shared = sq.shared;
+  } else {
+    si.objective = null; si.syncAt = 0; si.rally = s.rally; si.shared = null;
+  }
+
+  var cmd = c.command;
+  cmd.level = Command.level;
+  cmd.levelName = Command.levelName();
+  cmd.reportedPos = Command.reportedPos;
+  cmd.reportedAt = Command.reportedAt;
+
+  // corps visibles (perception propre du soldat)
+  c.bodies.length = 0;
+  for (var b = 0; b < s.pendingBodies.length; b++) c.bodies.push(s.pendingBodies[b]);
+  return c;
+}
+
+/** Proxy garde-fou : empêche toute lecture/écriture de ctx.player. */
+function makeCtxProxy(c) {
+  return new Proxy(c, {
+    get: function (t, k) {
+      if (k === 'player') throw new Error('OMNISCIENCE: lecture de ctx.player interdite');
+      return t[k];
+    },
+    set: function (t, k, v) {
+      if (k === 'player') throw new Error('OMNISCIENCE: écriture de ctx.player interdite');
+      t[k] = v; return true;
+    },
+    has: function (t, k) { return k === 'player' ? false : (k in t); }
+  });
+}
+
+/* --- helpers du cerveau --------------------------------------------- */
+function isThreatId(id) {
+  if (!id) return false;
+  if (id === 'intrus') return true;
+  return id.indexOf('inconnu:') === 0;
+}
+
+/** Meilleure menace connue : mémoire personnelle, sinon info d'escouade. */
+function bestThreat(s, ctx) {
+  var now = ctx.now;
+  var best = null, bestScore = -1;
+  var contacts = s.memory.contacts;
+  contacts.forEach(function (c) {
+    if (!isThreatId(c.id)) return;
+    if (ctx.bodies.indexOf(c.id) >= 0) return;
+    var e = s.memory.estimate(c, now);
+    var score = e.confidence / (1 + e.age * 0.08) + (c.source === 'sight' ? 0.45 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      best = { id: c.id, pos: e.pos, radius: e.radius, confidence: e.confidence,
+               age: e.age, source: c.source, personal: true };
+    }
+  });
+  // information d'escouade (radio) : seconde main, donc moins fiable
+  var sh = ctx.squadInfo.shared;
+  if (sh && (!best || best.confidence < 0.5)) {
+    var age2 = now - sh.at;
+    var conf2 = sh.confidence * 0.8;
+    if (conf2 / (1 + age2 * 0.08) > bestScore) {
+      best = { id: sh.id || 'intrus', pos: { x: sh.pos.x, y: sh.pos.y },
+               radius: (sh.radius || 6) + age2 * 0.6, confidence: conf2,
+               age: age2, source: 'squad', personal: false };
+    }
+  }
+  return best;
+}
+
+/**
+ * DISCIPLINE DE FEU : on ne tire que sur une cible RÉELLEMENT vue.
+ * Un bruit ou une info radio ne suffit pas à déclencher le tir, sinon les
+ * soldats arrosent des fantômes (et le bruit de leurs tirs entretient
+ * l'alerte). tolérance = fenêtre après la dernière vision directe.
+ */
+function canFire(s, th, now, tolerance) {
+  if (!th) return false;
+  if (th.source === 'sight' && th.age < 1.5) return true;
+  return (now - s.lastSightAt) < (tolerance === undefined ? 5 : tolerance);
+}
+
+function setState(s, st, now) {
+  if (s.state === st) return st;
+  s.prevState = s.state;
+  s.state = st;
+  s.stateTime = 0;
+  var d = s.d;
+  if (st === 'SEARCH') {
+    s.searchRadius = 3; s.searchAngle = G.rng() * TAU; s.searchLeg = 0;
+    s.searchTarget = null;
+    s.searchTimeout = d.searchTime * (0.8 + 0.4 * G.rng());
+  } else if (st === 'INVESTIGATE') {
+    s.path = null; s.pathGoal = null;
+  } else if (st === 'SUPPRESS') {
+    s.suppressDuration = 2.0 + 4.0 * G.rng() + (1 - d.discipline) * 3;
+  } else if (st === 'TAKE_COVER') {
+    s.coverPoint = null; s.coverTimer = 0;
+  } else if (st === 'SUSPICIOUS') {
+    s.suspWait = d.reactionTime * (0.9 + 0.7 * G.rng());
+  } else if (st === 'CHECK_BODY') {
+    s.bodyCheckTime = 2.0 + 2.0 * G.rng();
+    s.reachedBody = false;
+  } else if (st === 'FLANK') {
+    s.flankPoint = null; s.flankTimer = 0;
+  }
+  return st;
+}
+
+/** Regard de balayage d'un soldat au repos (va-et-vient ±40°). */
+function scanFacing(s, now) {
+  var a = s.facing0 + Math.sin(now * 0.45 + s.phase) * 0.7;
+  return { x: s.pos.x + Math.cos(a) * 10, y: s.pos.y + Math.sin(a) * 10 };
+}
+
+/* --- rapport radio --------------------------------------------------- */
+function maybeReportContact(s, ctx, th, now) {
+  var d = s.d;
+  if (now - s.lastRadioAt < 3.5) return;
+  // Un soldat peu discipliné ne pense pas toujours à rendre compte.
+  if (ctx.rng() > 0.30 + 0.70 * d.discipline) { s.lastRadioAt = now - 2.0; return; }
+  s.lastRadioAt = now;
+  s.lastThreat = th;
+  s.lastThreatPos = { x: th.pos.x, y: th.pos.y };
+  var text = th.source === 'sight'
+    ? ('contact vu ~(' + Math.round(th.pos.x) + ',' + Math.round(th.pos.y) + ') ' + U.pm(th.radius))
+    : ('contact ~( ' + Math.round(th.pos.x) + ',' + Math.round(th.pos.y) + ') ' + U.pm(th.radius));
+  ctx.radio.send({
+    to: 'squad', kind: 'contact', id: th.id, pos: { x: th.pos.x, y: th.pos.y },
+    posError: th.radius, confidence: th.confidence, text: text
+  }, now);
+  // remontée directe au commandement si la discipline est bonne
+  if (ctx.rng() < 0.35 + 0.6 * d.discipline) {
+    ctx.radio.send({
+      to: 'command', kind: 'contact', id: th.id, pos: { x: th.pos.x, y: th.pos.y },
+      posError: th.radius + 2, confidence: th.confidence * 0.9, text: text
+    }, now);
+  }
+  if (th.source === 'sight' && d.discipline < 0.5) ctx.radio.shout('il est là !', now);
+}
+
+function maybeReportSuspicion(s, ctx, th, now) {
+  var d = s.d;
+  if (now - s.lastRadioAt < 4) return;
+  if (ctx.rng() > 0.15 + 0.6 * d.discipline) return;
+  s.lastRadioAt = now;
+  s.lastThreat = th;
+  s.lastThreatPos = { x: th.pos.x, y: th.pos.y };
+  ctx.radio.send({
+    to: 'command', kind: 'suspicious', id: th ? th.id : 'intrus',
+    pos: th ? { x: th.pos.x, y: th.pos.y } : { x: s.pos.x, y: s.pos.y },
+    posError: th ? th.radius + 3 : 8, confidence: th ? th.confidence : 0.3,
+    text: 'bruit suspect ~(' + Math.round(th ? th.pos.x : s.pos.x) + ',' +
+          Math.round(th ? th.pos.y : s.pos.y) + ')'
+  }, now);
+}
+
+/* --- FLUX DU CERVEAU -------------------------------------------------- */
+var Brain = {
+  /** machine à états hiérarchique : transitions puis exécution */
+  think: function (s, ctx) {
+    var it = s.intent;
+    resetIntent(it);
+    var d = s.d, now = ctx.now, dt = ctx.dt;
+    s.stateTime += 0; // (stateTime est avancé par le moteur)
+
+    updateMorale(s, ctx, dt);
+
+    var th = bestThreat(s, ctx);
+    s.lastThreat = th;
+    if (th) {
+      s.lastThreatPos = { x: th.pos.x, y: th.pos.y };
+      if (th.source === 'sight' && th.age < 2) s.lastSightAt = now;
+    }
+    ctx.threat = th;
+
+    // --- transitions globales prioritaires ---
+    var st = s.state;
+    if (th && s.morale <= d.flee) {
+      st = setState(s, d.discipline >= 0.8 ? 'RETREAT' : 'FLEE', now);
+    } else if (s.pendingBodies.length > 0 && st !== 'CHECK_BODY') {
+      s.bodyTarget = s.pendingBodies[0];
+      st = setState(s, 'CHECK_BODY', now);
+    } else {
+      // délai de réaction : on n'agit pas avant d'avoir "compris"
+      var reacting = now < s.reactAt;
+      var next = TRANSITIONS[st] ? TRANSITIONS[st](s, ctx, th, now, reacting) : null;
+      if (next && next !== st) st = setState(s, next, now);
+    }
+
+    // --- exécution de l'état courant ---
+    var h = HANDLERS[st] || HANDLERS.PATROL;
+    h(s, ctx, th, now, it);
+    it.state = st;
+    return it;
+  }
+};
+
+function updateMorale(s, ctx, dt) {
+  var m = CFG.morale, d = s.d;
+  var dm = 0;
+  var th = ctx.threat;
+  if (!th) dm += m.regen;
+  var pals = ctx.squadInfo.alive;
+  if (pals > 0) dm += m.allyNear * Math.min(pals, 3);
+  else dm += m.outnumbered * 0.25;
+  if (s.suppression > 0.15) dm += m.suppressed * s.suppression;
+  if (s.hp < s.maxHp * 0.55) dm -= 0.012;
+  if (th && th.confidence > 0.6) dm -= (1 - d.discipline) * 0.01;
+  s.morale = U.clamp(s.morale + dm * dt, 0, 1);
+}
+
+/* --- TABLE DES TRANSITIONS ------------------------------------------- */
+var TRANSITIONS = {
+
+  PATROL: function (s, ctx, th, now, reacting) {
+    if (!s.released) return null;                       // consigne : on tient le poste
+    // un ordre d'escouade récent (position rapportée par le commandement) prime
+    var obj = ctx.squadInfo.objective;
+    if (obj && now - obj.at < 60 && U.distP(s.pos, obj.pos) > 4) return 'INVESTIGATE';
+    if (!th) return null;
+    if (th.confidence < 0.12) return null;
+    return 'SUSPICIOUS';                                // on s'oriente vers le stimulus
+  },
+
+  SUSPICIOUS: function (s, ctx, th, now) {
+    if (!th) return s.stateTime > s.suspWait ? 'PATROL' : null;
+    if (th.source === 'sight' && th.age < 1.5) {
+      return s.d.coverUse > 0.6 ? 'TAKE_COVER' : 'ENGAGE';
+    }
+    if (s.stateTime >= s.suspWait) {
+      if (th.confidence >= 0.18) return 'INVESTIGATE';
+      return 'PATROL';
+    }
+    return null;
+  },
+
+  INVESTIGATE: function (s, ctx, th, now) {
+    var obj = ctx.squadInfo.objective;
+    var objFresh = obj && (now - obj.at) < 60;
+    if (!th) {
+      // on continue vers l'objectif d'escouade tant qu'on n'y est pas
+      if (objFresh && U.distP(s.pos, obj.pos) > 4) return null;
+      return 'RETREAT';
+    }
+    if (th.source === 'sight' && th.age < 1.5) {
+      return s.d.coverUse > 0.6 ? 'TAKE_COVER' : 'ENGAGE';
+    }
+    // rôle d'escouade : les unités coordonnées contournent
+    if (s.orders.role === 'flank' && s.d.coordination >= 0.5 && th.confidence > 0.3) {
+      if (s.stateTime > 1.0) return 'FLANK';
+    }
+    if (s.orders.role === 'hold') { if (s.stateTime > 3) return 'SEARCH'; }
+    // arrivé sur la zone estimée et info déjà vieille : on fouille
+    var dd = U.distP(s.pos, th.pos);
+    if (dd < 3.0 && th.age > 1.5) return 'SEARCH';
+    if (th.age > 8 && dd < 6) return 'SEARCH';
+    if (th.confidence < 0.12 && s.stateTime > 4) return 'RETREAT';
+    return null;
+  },
+
+  ENGAGE: function (s, ctx, th, now) {
+    if (!th) return 'RETREAT';
+    var sight = th.source === 'sight' && th.age < 1.5;
+    var los = World.hasLineOfSight(s.pos, th.pos);
+    // débordement coordonné : au contact, le rôle "flank" se dérobe après un
+    // délai (court chez les FS) pendant que le rôle "fix" entretient le feu
+    var peel = s.orders.role === 'flank' && s.d.coordination >= 0.5 &&
+               s.stateTime > (s.d.coordination >= 0.9 ? 2.0 : 3.5);
+    if (sight && los) return peel ? 'FLANK' : null;
+    if (sight) return s.d.coverUse > 0.6 ? 'TAKE_COVER' : null;
+    if (s.orders.role === 'flank' && s.d.coordination >= 0.5 && s.stateTime > 1.5) return 'FLANK';
+    // la suppression n'a de sens que si la cible a été vue récemment
+    if (th.age < 4 && s.d.aggression >= 0.5 && now - s.lastSightAt < 8) return 'SUPPRESS';
+    return 'INVESTIGATE';
+  },
+
+  TAKE_COVER: function (s, ctx, th, now) {
+    if (!th) return 'RETREAT';
+    if (th.source === 'sight' && th.age < 1.5 && World.hasLineOfSight(s.pos, th.pos)) {
+      // le rôle "flank" ne s'enterre pas : il part au débordement
+      if (s.orders.role === 'flank' && s.d.coordination >= 0.5 &&
+          s.stateTime > (s.d.coordination >= 0.9 ? 2.0 : 3.5)) return 'FLANK';
+      if (s.coverTimer > 0.4 || s.stateTime > 6) return 'ENGAGE';
+      return null;
+    }
+    if (s.stateTime > 8) return 'ENGAGE';
+    if (th.age > 6) return 'SEARCH';
+    return null;
+  },
+
+  SUPPRESS: function (s, ctx, th, now) {
+    if (!th) return 'RETREAT';
+    if (th.source === 'sight' && th.age < 1.5) return 'ENGAGE';
+    if (s.stateTime > s.suppressDuration) return 'SEARCH';
+    return null;
+  },
+
+  FLANK: function (s, ctx, th, now) {
+    if (!th) return 'RETREAT';
+    var inPos = s.flankPoint && U.distP(s.pos, s.flankPoint) < 3.5;
+    var los = World.hasLineOfSight(s.pos, th.pos);
+    if (s.stateTime < 2.0) return null;            // pas de demi-tour immédiat
+    if (th.source === 'sight' && th.age < 1.5 &&
+        (inPos || now >= (ctx.squadInfo.syncAt || 0))) {
+      if (!s.orders.holdFire || now >= (ctx.squadInfo.syncAt || 0) || inPos) return 'ENGAGE';
+    }
+    if (s.stateTime > 26) return 'ENGAGE';
+    if (inPos && s.stateTime > 4) return 'ENGAGE';
+    return null;
+  },
+
+  SEARCH: function (s, ctx, th, now) {
+    if (th && th.source === 'sight' && th.age < 1.5) {
+      return s.d.coverUse > 0.6 ? 'TAKE_COVER' : 'ENGAGE';
+    }
+    if (th && th.confidence >= 0.45 && th.age < 2.5 && th.personal) return 'INVESTIGATE';
+    if (s.stateTime > s.searchTimeout) return 'RETREAT';
+    if (!th && s.stateTime > 3) return 'RETREAT';
+    return null;
+  },
+
+  RETREAT: function (s, ctx, th, now) {
+    if (th && th.source === 'sight' && th.age < 1.5 && s.morale > s.d.flee * 1.3
+        && World.hasLineOfSight(s.pos, th.pos)) return 'ENGAGE';
+    if (th && th.confidence > 0.5 && th.age < 3 && s.morale > s.d.flee) return 'INVESTIGATE';
+    var rally = ctx.squadInfo.rally || s.rally;
+    if (U.distP(s.pos, rally) < 3) {
+      if (s.morale > s.d.flee * 1.5) return 'PATROL';
+    }
+    if (s.stateTime > 25) return 'PATROL';
+    return null;
+  },
+
+  FLEE: function (s, ctx, th, now) {
+    if (s.stateTime < 6) return null;
+    if (!th || U.distP(s.pos, th.pos) > 30) {
+      s.morale = U.clamp(s.morale + 0.22, 0, 1);   // hystérésis : pas de yo-yo
+      return 'RETREAT';
+    }
+    if (s.stateTime > 22) { s.morale = U.clamp(s.morale + 0.3, 0, 1); return 'RETREAT'; }
+    return null;
+  },
+
+  CHECK_BODY: function (s, ctx, th, now) {
+    if (s.pendingBodies.length === 0 && s.reachedBody && s.stateTime > s.bodyCheckTime) {
+      if (s.bodyTarget) { s.searchOrigin = { x: s.bodyTarget.pos.x, y: s.bodyTarget.pos.y }; }
+      return 'SEARCH';
+    }
+    if (s.stateTime > s.bodyCheckTime * 4) {
+      if (s.pendingBodies.length > 0) s.pendingBodies.shift();
+      s.bodyTarget = null;
+      return 'SEARCH';
+    }
+    return null;
+  },
+
+  DEAD: function () { return null; }
+};
+
+/* --- TABLE DES GESTIONNAIRES D'ÉTAT ---------------------------------- */
+var HANDLERS = {
+
+  PATROL: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!s.released) {                      // consigne : tenir la caserne
+      it.face = scanFacing(s, now); it.speed = 0; it.note = 'consigne';
+      return;
+    }
+    if (s.isStatic || !s.waypoints || s.waypoints.length === 0) {
+      it.face = scanFacing(s, now); it.speed = 0; it.note = 'poste';
+      if (U.distP(s.pos, s.home) > 1.5) { it.move = s.home; it.speed = 0.4; }
+      return;
+    }
+    var wp = s.waypoints[s.wpIndex % s.waypoints.length];
+    if (s.waitTimer > 0) {
+      it.speed = 0; it.face = scanFacing(s, now); it.note = 'pause';
+      return;
+    }
+    if (U.distP(s.pos, wp) < 1.6) {
+      s.wpIndex = (s.wpIndex + 1) % s.waypoints.length;
+      s.waitTimer = 0.7 + 1.8 * ctx.rng();
+    }
+    it.move = wp; it.speed = 0.45; it.face = wp; it.note = '';
+  },
+
+  SUSPICIOUS: function (s, ctx, th, now, it) {
+    if (th) it.face = th.pos;
+    else it.face = scanFacing(s, now);
+    it.speed = 0;
+    it.note = s.stimulusKind === 'gunshot' ? 'coup de feu ?' : 'écoute';
+    if (s.d.discipline > 0.6) it.crouch = false;
+    if (th) maybeReportSuspicion(s, ctx, th, now);
+  },
+
+  INVESTIGATE: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!th) {
+      // pas de contact personnel : on marche sur l'objectif d'escouade
+      var obj = ctx.squadInfo.objective;
+      if (obj && now - obj.at < 60) {
+        it.move = obj.pos; it.speed = 0.7; it.face = obj.pos; it.note = 'objectif';
+        if (U.distP(s.pos, obj.pos) < 4) { it.move = null; it.speed = 0; it.note = 'sur objectif'; }
+      } else { it.face = scanFacing(s, now); it.note = 'rien'; }
+      return;
+    }
+    it.face = th.pos;
+    it.aim = null;
+    it.move = th.pos;
+    it.speed = d.coverUse < 0.5 ? 0.95 : 0.62;      // la milice fonce
+    if (d.discipline > 0.6 && U.distP(s.pos, th.pos) < 14) it.crouch = true;
+    if (d.discipline > 0.8) it.crouch = U.distP(s.pos, th.pos) < 18;
+    if (U.distP(s.pos, th.pos) < 5) it.speed = Math.min(it.speed, 0.35);
+    // progression bondissante : un seul élément bouge à la fois
+    if (s.orders.role === 'bound' && !s.orders.moveNow) {
+      it.move = null; it.speed = 0; it.note = 'couvre';
+      it.face = th.pos;
+      if (World.hasLineOfSight(s.pos, th.pos) && canFire(s, th, now)) {
+        it.fire = true; it.aim = th.pos; it.aimQuality = 0.3;
+      }
+      return;
+    }
+    if (th.confidence > 0.35) maybeReportContact(s, ctx, th, now);
+  },
+
+  ENGAGE: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!th) { it.face = scanFacing(s, now); return; }
+    it.face = th.pos;
+    var dd = U.distP(s.pos, th.pos);
+    var los = World.hasLineOfSight(s.pos, th.pos);
+    if (los && dd <= d.maxFireRange && canFire(s, th, now)) {
+      it.fire = true; it.aim = th.pos;
+      it.aimQuality = U.clamp(th.confidence * (1 - Math.min(0.8, th.age / 6)), 0.15, 1);
+      it.speed = 0;
+      it.note = 'feu';
+      maybeReportContact(s, ctx, th, now);
+      // rôle "fix" : on tient la position et on alimente le feu
+      if (s.orders.role === 'fix' && d.coordination >= 0.5) { it.move = null; it.speed = 0; }
+      else if (d.coverUse > 0.6) {
+        var cp = World.findCover(s.pos, th.pos, {
+          mode: 'fire', maxDist: 6, preferredRange: Math.min(16, d.maxFireRange * 0.35),
+          occupied: ctx.squadInfo.allyPositions
+        });
+        if (cp && U.distP(cp, s.pos) > 1.5) { it.move = cp; it.speed = 0.8; }
+      }
+    } else if (!los) {
+      if (d.coverUse > 0.6) {
+        var cp2 = World.findCover(s.pos, th.pos, {
+          mode: 'fire', maxDist: CFG.ai.coverMaxDist,
+          preferredRange: Math.min(18, d.maxFireRange * 0.4),
+          occupied: ctx.squadInfo.allyPositions
+        });
+        if (cp2) { it.move = cp2; it.speed = 1; it.note = 'poste de tir'; }
+        else { it.move = th.pos; it.speed = 0.7; }
+      } else {
+        // milice : avance à découvert vers la cible
+        it.move = th.pos; it.speed = 1; it.note = 'avance';
+      }
+      maybeReportContact(s, ctx, th, now);
+    } else {
+      // hors de portée : on se rapproche
+      it.move = th.pos; it.speed = 0.9; it.note = 'hors portée';
+    }
+  },
+
+  TAKE_COVER: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!th) { it.face = scanFacing(s, now); return; }
+    it.face = th.pos;
+    s.coverTimer += ctx.dt;
+    var needNew = !s.coverPoint;
+    if (s.coverPoint) {
+      var dd0 = U.distP(s.pos, s.coverPoint);
+      if (dd0 < 1.2) needNew = false;
+      else if (s.stateTime > 5) needNew = true;
+      else if (!World.hasLineOfSight(s.coverPoint, th.pos) && s.stateTime > 2.5) needNew = true;
+    }
+    if (needNew) {
+      s.coverPoint = World.findCover(s.pos, th.pos, {
+        mode: 'fire', maxDist: CFG.ai.coverMaxDist,
+        preferredRange: Math.min(18, d.maxFireRange * 0.4),
+        occupied: ctx.squadInfo.allyPositions
+      });
+      s.coverTimer = 0;
+    }
+    if (s.coverPoint) {
+      it.move = s.coverPoint; it.speed = 1;
+      if (U.distP(s.pos, s.coverPoint) < 1.3) {
+        it.move = null; it.speed = 0;
+        if (World.hasLineOfSight(s.pos, th.pos) && U.distP(s.pos, th.pos) <= d.maxFireRange &&
+            canFire(s, th, now)) {
+          it.fire = true; it.aim = th.pos;
+          it.aimQuality = U.clamp(th.confidence * (1 - Math.min(0.8, th.age / 6)), 0.15, 1);
+          it.note = 'tir couvert';
+        } else {
+          it.note = 'à couvert';
+          it.crouch = d.discipline > 0.5;
+        }
+      }
+    } else {
+      it.speed = 0; it.note = 'à couvert';
+    }
+    maybeReportContact(s, ctx, th, now);
+  },
+
+  SUPPRESS: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!th) { it.face = scanFacing(s, now); return; }
+    it.face = th.pos; it.aim = th.pos;
+    it.aimQuality = 0.2 + 0.3 * d.accuracy;      // on arrose une zone
+    // on n'arrose que ce qu'on a réellement vu ; les unités très
+    // disciplinées ne gaspillent pas leurs munitions
+    it.fire = canFire(s, th, now, 8) && (d.discipline > 0.8 ? (ctx.rng() < 0.45) : true);
+    if (!it.fire) it.note = 'guette';
+    it.speed = 0;
+    it.note = 'arrose';
+    if (d.coverUse > 0.6 && s.coverPoint === null) {
+      var cp = World.findCover(s.pos, th.pos, { mode: 'hide', maxDist: 8,
+        occupied: ctx.squadInfo.allyPositions });
+      if (cp) { it.move = cp; it.speed = 0.9; }
+    }
+  },
+
+  FLANK: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!th) { it.face = scanFacing(s, now); return; }
+    s.flankTimer -= ctx.dt;
+    if (!s.flankPoint || s.flankTimer <= 0) {
+      s.flankPoint = computeFlankPoint(s, ctx, th, s.flankSide);
+      s.flankTimer = 3.0;
+      s.path = null;
+    }
+    it.move = s.flankPoint; it.speed = 1;
+    it.face = th.pos;
+    var inPos = U.distP(s.pos, s.flankPoint) < 3.5;
+    var los = World.hasLineOfSight(s.pos, th.pos);
+    var dd = U.distP(s.pos, th.pos);
+    var synced = now >= (ctx.squadInfo.syncAt || 0);
+    if (inPos) { it.speed = 0; it.move = null; }
+    if (los && dd <= d.maxFireRange && canFire(s, th, now) &&
+        (inPos || synced || s.d.discipline < 0.8)) {
+      it.fire = true; it.aim = th.pos;
+      it.aimQuality = U.clamp(th.confidence * (1 - Math.min(0.8, th.age / 6)), 0.15, 1);
+      it.note = 'flanc → feu';
+    } else {
+      it.note = 'contourne';
+    }
+    if (it.fire) maybeReportContact(s, ctx, th, now);
+  },
+
+  SEARCH: function (s, ctx, th, now, it) {
+    var d = s.d;
+    if (!s.searchOrigin) {
+      s.searchOrigin = th ? { x: th.pos.x, y: th.pos.y } : { x: s.pos.x, y: s.pos.y };
+    }
+    var reached = !s.searchTarget || U.distP(s.pos, s.searchTarget) < 2.2;
+    if (reached) {
+      s.searchLeg++;
+      s.searchAngle += 2.1 + ctx.rng() * 0.8;
+      if (s.searchLeg % 2 === 0) {
+        s.searchRadius = Math.min(CFG.ai.searchMax, s.searchRadius + CFG.ai.searchStep);
+      }
+      var p = {
+        x: s.searchOrigin.x + Math.cos(s.searchAngle) * s.searchRadius,
+        y: s.searchOrigin.y + Math.sin(s.searchAngle) * s.searchRadius
+      };
+      p.x = U.clamp(p.x, 2, CFG.world.w - 2);
+      p.y = U.clamp(p.y, 2, CFG.world.h - 2);
+      if (!World.isFree(p.x, p.y)) { var f = World.nearestFree(p.x, p.y); p.x = f.x; p.y = f.y; }
+      s.searchTarget = p;
+      s.path = null;
+    }
+    it.move = s.searchTarget;
+    it.speed = 0.55;
+    // balayage du regard : on regarde là où l'on va, en balayant
+    if (s.searchTarget) {
+      var a = Math.atan2(s.searchTarget.y - s.pos.y, s.searchTarget.x - s.pos.x)
+            + Math.sin(now * 1.6 + s.phase) * 0.8;
+      it.face = { x: s.pos.x + Math.cos(a) * 10, y: s.pos.y + Math.sin(a) * 10 };
+    }
+    it.note = 'fouille r=' + Math.round(s.searchRadius) + 'm';
+    if (th && th.confidence > 0.5) maybeReportContact(s, ctx, th, now);
+  },
+
+  RETREAT: function (s, ctx, th, now, it) {
+    var d = s.d;
+    var rally = ctx.squadInfo.rally || s.rally;
+    it.move = rally;
+    it.speed = 0.8;
+    if (th) {
+      it.face = th.pos;
+      if (d.discipline > 0.6 && World.hasLineOfSight(s.pos, th.pos) &&
+          U.distP(s.pos, th.pos) <= d.maxFireRange && canFire(s, th, now)) {
+        it.fire = true; it.aim = th.pos; it.aimQuality = 0.25;
+        it.note = 'repli + feu';
+      } else it.note = 'repli';
+    } else it.note = 'regroupement';
+    if (U.distP(s.pos, rally) < 2.5) { it.move = null; it.speed = 0; }
+  },
+
+  FLEE: function (s, ctx, th, now, it) {
+    it.note = 'panique';
+    it.fire = false;
+    if (!th) { it.face = scanFacing(s, now); it.speed = 0.6; return; }
+    // on court à l'opposé de la menace estimée
+    var dx = s.pos.x - th.pos.x, dy = s.pos.y - th.pos.y;
+    var n = Math.hypot(dx, dy) || 1;
+    var away = {
+      x: U.clamp(s.pos.x + (dx / n) * 30, 2, CFG.world.w - 2),
+      y: U.clamp(s.pos.y + (dy / n) * 30, 2, CFG.world.h - 2)
+    };
+    if (!World.isFree(away.x, away.y)) {
+      var f = World.randomFreeNear(s.pos.x, s.pos.y, 25, ctx.rng, 10);
+      away = f;
+    }
+    it.move = away; it.speed = 1;
+    it.face = th.pos;
+    if (ctx.rng() < 0.03) ctx.radio.shout('contact ! contact !', now);
+  },
+
+  CHECK_BODY: function (s, ctx, th, now, it) {
+    var b = s.bodyTarget;
+    if (!b) { it.face = scanFacing(s, now); return; }
+    var dd = U.distP(s.pos, b.pos);
+    it.face = b.pos;
+    if (dd > 2.2) { it.move = b.pos; it.speed = 0.85; it.note = 'corps'; }
+    else {
+      s.reachedBody = true;
+      it.speed = 0;
+      it.note = 'examine';
+      if (s.stateTime > s.bodyCheckTime && s.pendingBodies.length > 0) {
+        s.pendingBodies.shift();
+      }
+    }
+  },
+
+  DEAD: function (s, ctx, th, now, it) { it.speed = 0; it.move = null; }
+};
+
+/** Point de contournement : à portée d'arme, décalé de l'axe d'approche. */
+function computeFlankPoint(s, ctx, th, side) {
+  var ref = ctx.squadInfo.rally || s.home;
+  var base = Math.atan2(th.pos.y - ref.y, th.pos.x - ref.x);
+  var a = base + side * (Math.PI * 62 / 180);
+  var R = U.clamp(U.distP(s.pos, th.pos) * 0.75 + 6, 12, s.d.maxFireRange * 0.6);
+  var p = { x: th.pos.x - Math.cos(a) * R, y: th.pos.y - Math.sin(a) * R };
+  p.x = U.clamp(p.x, 2, CFG.world.w - 2);
+  p.y = U.clamp(p.y, 2, CFG.world.h - 2);
+  if (!World.isFree(p.x, p.y)) {
+    var f = World.nearestFree(p.x, p.y);
+    p.x = f.x; p.y = f.y;
+  }
+  if (s.d.coverUse > 0.6) {
+    var cp = World.findCover(p, th.pos, {
+      mode: 'fire', maxDist: 8, preferredRange: Math.min(16, s.d.maxFireRange * 0.35),
+      occupied: ctx.squadInfo.allyPositions
+    });
+    if (cp) return { x: cp.x, y: cp.y };
+  }
+  return p;
+}
+
+/* =====================================================================
+   8. SQUAD — information partagée (radio/voix) et répartition des rôles
+   Rôles : 'fix' (fixer), 'flank' (contourner), 'search' (fouiller),
+           'bound' (bondir à couvert), 'assault' (avancer, sans plan),
+           'hold' (tenir), 'none'.
+   ===================================================================== */
+function Squad(id, doctrineKey) {
+  this.id = id;
+  this.key = doctrineKey;
+  this.d = DOCTRINES[doctrineKey];
+  this.members = [];
+  this.shared = null;        // { id,pos,radius,confidence,at,by } — nourri par la RADIO
+  this.objective = null;     // { pos, at } — ordre du commandement
+  this.rally = { x: 0, y: 0 };
+  this.syncAt = 0;
+  this.boundTurn = 0;
+  this.boundTimer = 0;
+  this.lastPlanAt = -999;
+  this.lastPlanPos = null;
+  this.planNote = '';
+  this.coordinated = false;
+  this.forceReplan = false;
+}
+
+Squad.prototype.add = function (s) {
+  this.members.push(s);
+  s.squad = this;
+  if (this.members.length === 1) { this.rally.x = s.home.x; this.rally.y = s.home.y; }
+};
+
+Squad.prototype.aliveList = function () {
+  var out = [];
+  for (var i = 0; i < this.members.length; i++) if (this.members[i].alive) out.push(this.members[i]);
+  return out;
+};
+
+Squad.prototype.update = function (dt, now) {
+  var alive = this.aliveList();
+  if (alive.length === 0) return;
+
+  // L'info partagée vieillit : au bout de 40 s on n'y croit plus.
+  if (this.shared && now - this.shared.at > 40) this.shared = null;
+
+  // point de ralliement = centroïde des vivants
+  var cx = 0, cy = 0;
+  for (var i = 0; i < alive.length; i++) { cx += alive[i].pos.x; cy += alive[i].pos.y; }
+  this.rally.x = cx / alive.length;
+  this.rally.y = cy / alive.length;
+
+  var target = this.shared ? this.shared.pos : (this.objective ? this.objective.pos : null);
+  var moved = target && this.lastPlanPos && U.distP(target, this.lastPlanPos) > 8;
+  if (this.forceReplan || moved || (now - this.lastPlanAt > 5 && target)) {
+    this.plan(now, target);
+    this.forceReplan = false;
+    this.lastPlanPos = target ? { x: target.x, y: target.y } : null;
+  }
+
+  // bonds : pour les rôles 'bound', un seul élément progresse à la fois
+  this.boundTimer -= dt;
+  if (this.boundTimer <= 0) {
+    this.boundTimer = 3.0 + G.rng() * 2.5;
+    this.boundTurn = (this.boundTurn + 1) % Math.max(1, alive.length);
+  }
+  for (var k = 0; k < alive.length; k++) {
+    var m = alive[k];
+    m.orders.moveNow = (m.orders.role === 'bound') ? (k === this.boundTurn % alive.length) : true;
+    if (!this.coordinated) m.orders.moveNow = true;   // la milice ne synchronise rien
+  }
+};
+
+/** Répartition des rôles selon le niveau de coordination de la doctrine. */
+Squad.prototype.plan = function (now, target) {
+  var alive = this.aliveList();
+  this.lastPlanAt = now;
+  for (var z = 0; z < alive.length; z++) { alive[z].orders.objective = target; alive[z].orders.holdFire = false; }
+  if (!target) {
+    for (z = 0; z < alive.length; z++) alive[z].orders.role = 'none';
+    this.planNote = '';
+    return;
+  }
+  var d = this.d;
+  // tri par distance à l'objectif
+  alive.sort(function (a, b) { return U.distP(a.pos, target) - U.distP(b.pos, target); });
+
+  // Une milice "oublie" souvent le plan : elle agit en tas.
+  this.coordinated = G.rng() < d.coordination;
+  if (!this.coordinated) {
+    for (z = 0; z < alive.length; z++) { alive[z].orders.role = 'assault'; }
+    this.planNote = 'sans plan (tas)';
+    return;
+  }
+
+  if (d.coordination >= 0.9) {
+    // fix + flancs synchronisés de part et d'autre, jamais groupés
+    alive[0].orders.role = 'fix';
+    alive[0].flankSide = 0;
+    for (z = 1; z < alive.length; z++) {
+      alive[z].orders.role = 'flank';
+      alive[z].flankSide = (z % 2 === 1) ? 1 : -1;
+      alive[z].orders.holdFire = true;      // feu tenu jusqu'à l'heure d'assaut
+    }
+    this.syncAt = now + 12;
+    this.planNote = 'fix + flancs sync';
+  } else if (d.coordination >= 0.5) {
+    alive[0].orders.role = 'fix';
+    if (alive.length > 1) {
+      alive[1].orders.role = 'flank';
+      alive[1].flankSide = G.rng() < 0.5 ? 1 : -1;
+      alive[1].orders.holdFire = false;
+    }
+    for (z = 2; z < alive.length; z++) alive[z].orders.role = 'bound';
+    this.syncAt = now + 8;
+    this.planNote = 'fix + flanc + bonds';
+  } else {
+    alive[0].orders.role = 'assault';
+    for (z = 1; z < alive.length; z++) alive[z].orders.role = 'search';
+    this.planNote = 'fouille';
+  }
+};
+
+Squad.prototype.onDeath = function (s, now) {
+  this.forceReplan = true;
+  logEvent('escouade ' + this.id + ': ' + s.id + ' est tombé, replanification');
+};
+
+/* =====================================================================
+   9. COMMAND — niveau d'alerte, renforts, et RIEN d'autre
+   Le niveau ne monte QUE par des rapports effectivement reçus (radio).
+   ===================================================================== */
+var Command = {
+  LEVELS: ['CALM', 'SUSPICIOUS', 'ALERT', 'COMBAT'],
+  level: 0, levelSince: 0, lastEventAt: 0,
+  reportedPos: null, reportedAt: -999, reportedBy: null, reportedError: 0,
+  combatTime: 0, dead: 0,
+  regularsReleased: false, sfCalled: false, sfArriveAt: 0, sfSpawned: false,
+  history: [],
+
+  reset: function () {
+    this.level = 0; this.levelSince = 0; this.lastEventAt = 0;
+    this.reportedPos = null; this.reportedAt = -999; this.reportedBy = null;
+    this.reportedError = 0; this.combatTime = 0; this.dead = 0;
+    this.regularsReleased = false; this.sfCalled = false;
+    this.sfArriveAt = 0; this.sfSpawned = false;
+    this.history.length = 0;
+  },
+
+  levelName: function () { return this.LEVELS[this.level]; },
+
+  raise: function (lvl, now) {
+    if (lvl > this.level) {
+      this.level = lvl;
+      this.levelSince = now;
+      logEvent('CMD: alerte → ' + this.levelName());
+    }
+  },
+
+  /** Rapport reçu par le commandement (radio uniquement). */
+  report: function (kind, data, now) {
+    this.lastEventAt = now;
+    var pos = data && data.pos ? { x: data.pos.x, y: data.pos.y } : null;
+    if (kind === 'suspicious' || kind === 'sound') {
+      this.raise(1, now);
+    } else if (kind === 'contact') {
+      if (pos) { this.reportedPos = pos; this.reportedAt = now; }
+      this.reportedBy = data && data.by ? data.by.id : null;
+      this.reportedError = data && data.posError ? data.posError : 0;
+      this.raise(2, now);
+    } else if (kind === 'body') {
+      if (pos) { this.reportedPos = pos; this.reportedAt = now; }
+      this.reportedBy = data && data.by ? data.by.id : null;
+      this.raise(2, now);
+    } else if (kind === 'engaging' || kind === 'underfire') {
+      if (pos) { this.reportedPos = pos; this.reportedAt = now; }
+      this.raise(3, now);
+    }
+  },
+
+  onEnemyDown: function (now) {
+    this.dead++;
+    this.lastEventAt = now;
+  },
+
+  update: function (dt, now) {
+    // décroissance d'un cran après un calme prolongé
+    if (this.level > 0) {
+      var wait = CFG.command.decay[this.LEVELS[this.level]] || 20;
+      if (now - this.lastEventAt > wait) {
+        this.level--;
+        this.lastEventAt = now;
+        this.levelSince = now;
+        logEvent('CMD: alerte ↓ ' + this.levelName());
+      }
+    }
+    if (this.level === 3) this.combatTime += dt;
+
+    // --- renforts ---
+    if (this.level >= CFG.command.regularReleaseAlert && !this.regularsReleased) {
+      this.regularsReleased = true;
+      Scenario.releaseRegulars(now);
+    }
+    if (!this.sfCalled && (this.combatTime > CFG.command.sfCombatTime ||
+                           this.dead >= CFG.command.sfDeadCount)) {
+      this.sfCalled = true;
+      this.sfArriveAt = now + CFG.command.sfArrivalDelay;
+      logEvent('CMD: forces spéciales engagées — arrivée dans ' +
+               CFG.command.sfArrivalDelay + ' s');
+    }
+    if (this.sfCalled && !this.sfSpawned && now >= this.sfArriveAt) {
+      this.sfSpawned = true;
+      Scenario.spawnSF(now);
+    }
+  }
+};
+
+/* =====================================================================
+   10. JOUEUR & COMBAT
+   ===================================================================== */
+var Player = {
+  pos: { x: 10, y: 78 }, vel: { x: 0, y: 0 }, facing: 0,
+  aim: { x: 30, y: 78 },
+  hp: 100, alive: true,
+  crouch: false, sprint: false, moving: false, speed: 0,
+  fireCd: 0, rockCd: 0, footTimer: 0, kills: 0, shots: 0,
+
+  reset: function () {
+    this.pos.x = 10; this.pos.y = 78;
+    this.vel.x = 0; this.vel.y = 0;
+    this.facing = 0; this.aim.x = 30; this.aim.y = 78;
+    this.hp = 100; this.alive = true;
+    this.crouch = false; this.sprint = false; this.moving = false; this.speed = 0;
+    this.fireCd = 0; this.rockCd = 0; this.footTimer = 0; this.kills = 0; this.shots = 0;
+  },
+
+  visibility: function () {
+    if (!this.alive) return 0;
+    if (this.crouch) return this.moving ? CFG.vis.crouch : CFG.vis.crouchStill;
+    return CFG.vis.stand;
+  },
+
+  update: function (dt, now) {
+    var p = this;
+    if (!p.alive) return;
+    p.fireCd -= dt; p.rockCd -= dt;
+
+    var ix = (Input.right ? 1 : 0) - (Input.left ? 1 : 0);
+    var iy = (Input.down ? 1 : 0) - (Input.up ? 1 : 0);
+    var n = Math.hypot(ix, iy);
+    if (n > 0) { ix /= n; iy /= n; }
+
+    p.sprint = Input.sprint && !p.crouch && n > 0;
+    var sp = p.crouch ? CFG.player.speedCrouch : (p.sprint ? CFG.player.speedSprint : CFG.player.speedWalk);
+    var tvx = ix * sp, tvy = iy * sp;
+    var k = 1 - Math.exp(-CFG.player.accel * dt);
+    p.vel.x += (tvx - p.vel.x) * k;
+    p.vel.y += (tvy - p.vel.y) * k;
+    p.pos.x += p.vel.x * dt;
+    p.pos.y += p.vel.y * dt;
+    World.resolveCircle(p.pos, CFG.player.r);
+    p.speed = Math.hypot(p.vel.x, p.vel.y);
+    p.moving = p.speed > 0.35;
+
+    p.facing = Math.atan2(p.aim.y - p.pos.y, p.aim.x - p.pos.x);
+
+    // bruits de pas
+    if (p.moving) {
+      p.footTimer -= dt;
+      if (p.footTimer <= 0) {
+        var loud = p.sprint ? CFG.noise.sprint : (p.crouch ? CFG.noise.crouch : CFG.noise.walk);
+        Combat.emitSound(p.pos, loud, 'footstep', 'intrus', now, false);
+        p.footTimer = p.sprint ? 0.32 : (p.crouch ? 0.75 : 0.5);
+      }
+    } else p.footTimer = 0;
+
+    if (Input.mouseDown && p.fireCd <= 0) Combat.playerShoot(now);
+  },
+
+  damage: function (amount, now, byId) {
+    if (!this.alive) return;
+    this.hp -= amount;
+    if (this.hp <= 0) {
+      this.hp = 0; this.alive = false;
+      logEvent('JOUEUR neutralisé par ' + byId);
+      UI.showOverlay('MISSION ÉCHOUÉE', 'Appuie sur R pour recommencer.');
+    }
+  }
+};
+
+/* --- géométrie de tir ------------------------------------------------ */
+function raySlab(ox, oy, dx, dy, r, maxD) {
+  var tmin = 0, tmax = maxD, t1, t2, tt;
+  if (Math.abs(dx) < 1e-9) {
+    if (ox < r.x || ox > r.x + r.w) return -1;
+  } else {
+    t1 = (r.x - ox) / dx; t2 = (r.x + r.w - ox) / dx;
+    if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return -1;
+  }
+  if (Math.abs(dy) < 1e-9) {
+    if (oy < r.y || oy > r.y + r.h) return -1;
+  } else {
+    t1 = (r.y - oy) / dy; t2 = (r.y + r.h - oy) / dy;
+    if (t1 > t2) { tt = t1; t1 = t2; t2 = tt; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return -1;
+  }
+  return tmin;
+}
+
+/** Distance du premier mur sur le rayon (maxD si aucun). */
+function raycastWall(from, dx, dy, maxD) {
+  var best = maxD;
+  for (var i = 0; i < World.walls.length; i++) {
+    var t = raySlab(from.x, from.y, dx, dy, World.walls[i], maxD);
+    if (t >= 0 && t < best) best = t;
+  }
+  return best;
+}
+
+var Combat = {
+  /* --- émission de bruit :唯一 point d'entrée vers perception.hear --- */
+  emitSound: function (pos, loudness, kind, sourceId, now, fx) {
+    if (fx !== false) {
+      G.noises.push({ x: pos.x, y: pos.y, r: loudness, born: now, kind: kind, life: 1.1 });
+      if (G.noises.length > 24) G.noises.shift();
+    }
+    var sound = { pos: { x: pos.x, y: pos.y }, loudness: loudness, kind: kind, sourceId: sourceId };
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var s = G.soldiers[i];
+      if (!s.alive || !s.released) continue;
+      var c = s.perception.hear(s, sound, now);
+      if (!c) continue;
+      if (!isThreatId(c.id)) continue;              // bruit ami : ignoré
+      s.lastStimulusAt = now;
+      s.stimulusKind = kind;
+      s.newStimulus = true;
+      // délai de réaction : la doctrine décide du temps de "compréhension"
+      var rt = s.d.reactionTime * (1 + (G.rng() * 2 - 1) * CFG.ai.reactionJitter);
+      if (kind === 'gunshot') rt *= 0.7;
+      if (now + rt > s.reactAt) s.reactAt = now + rt;
+      if (kind !== 'footstep' || G.rng() < 0.35) {
+        logEvent(s.id + ': ' + (kind === 'gunshot' ? 'coup de feu entendu' :
+                kind === 'impact' ? 'bruit de pierre' : 'bruit entendu') +
+                ' ~(' + Math.round(c.pos.x) + ',' + Math.round(c.pos.y) + ')');
+      }
+    }
+  },
+
+  playerShoot: function (now) {
+    var p = Player;
+    p.fireCd = CFG.player.fireCd;
+    p.shots++;
+    var spread = p.crouch ? CFG.player.spread.crouch
+               : (p.sprint ? CFG.player.spread.sprint : CFG.player.spread.stand);
+    var a = p.facing + (G.rng() * 2 - 1) * spread;
+    var dx = Math.cos(a), dy = Math.sin(a);
+    var maxD = 130;
+    var wt = raycastWall(p.pos, dx, dy, maxD);
+
+    var hitS = null, hitT = wt;
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var s = G.soldiers[i];
+      if (!s.alive) continue;
+      var px = s.pos.x - p.pos.x, py = s.pos.y - p.pos.y;
+      var t = px * dx + py * dy;
+      if (t <= 0 || t > hitT) continue;
+      var perp = Math.abs(px * dy - py * dx);
+      if (perp <= CFG.ai.radius + 0.12) { hitT = t; hitS = s; }
+    }
+    var end = { x: p.pos.x + dx * (hitS ? hitT : wt), y: p.pos.y + dy * (hitS ? hitT : wt) };
+    G.tracers.push({ a: { x: p.pos.x, y: p.pos.y }, b: end, born: now, ttl: 0.06, c: '#fff2c4' });
+    G.sparks.push({ x: end.x, y: end.y, born: now, ttl: 0.25 });
+
+    if (hitS) {
+      logEvent('J1 touche ' + hitS.id);
+      hitS.hurt(CFG.player.damage, now, 'J1');
+      if (!hitS.alive) Player.kills++;
+    }
+    // suppression : une balle qui passe près fait baisser le moral
+    for (i = 0; i < G.soldiers.length; i++) {
+      var s2 = G.soldiers[i];
+      if (!s2.alive || s2 === hitS) continue;
+      var qx = s2.pos.x - p.pos.x, qy = s2.pos.y - p.pos.y;
+      var t2 = qx * dx + qy * dy;
+      if (t2 <= 0 || t2 > wt) continue;
+      if (Math.abs(qx * dy - qy * dx) < 2.5) {
+        s2.suppression = Math.min(1, s2.suppression + 0.28);
+        s2.morale = U.clamp(s2.morale + CFG.morale.suppressed, 0, 1);
+      }
+    }
+    this.emitSound(p.pos, CFG.noise.gunshot, 'gunshot', 'intrus', now, true);
+    logEvent('J1: coup de feu');
+  },
+
+  throwRock: function (now) {
+    var p = Player;
+    if (p.rockCd > 0 || !p.alive) return;
+    p.rockCd = CFG.player.rockCd;
+    var dx = p.aim.x - p.pos.x, dy = p.aim.y - p.pos.y;
+    var d = Math.hypot(dx, dy) || 1;
+    var reach = Math.min(CFG.player.rockRange, d);
+    G.rocks.push({
+      x: p.pos.x, y: p.pos.y,
+      tx: p.pos.x + (dx / d) * reach, ty: p.pos.y + (dy / d) * reach,
+      vx: (dx / d) * CFG.player.rockSpeed, vy: (dy / d) * CFG.player.rockSpeed,
+      born: now
+    });
+    logEvent('J1: pierre lancée vers (' + Math.round(p.pos.x + (dx / d) * reach) + ',' +
+             Math.round(p.pos.y + (dy / d) * reach) + ')');
+  },
+
+  updateRocks: function (dt, now) {
+    for (var i = G.rocks.length - 1; i >= 0; i--) {
+      var r = G.rocks[i];
+      r.x += r.vx * dt; r.y += r.vy * dt;
+      if (U.dist(r.x, r.y, r.tx, r.ty) < 0.6 || !World.isFree(r.x, r.y, 0.05) || now - r.born > 3) {
+        G.rocks.splice(i, 1);
+        var p = World.isFree(r.x, r.y, 0.05) ? { x: r.x, y: r.y } : World.nearestFree(r.x, r.y);
+        this.emitSound(p, CFG.noise.rock, 'impact', null, now, true);
+        logEvent('pierre: impact ~(' + Math.round(p.x) + ',' + Math.round(p.y) + ')');
+      }
+    }
+  },
+
+  /** Un soldat ouvre le feu sur une position ESTIMÉE (pas la vraie). */
+  fireOneShot: function (s, aimPos, quality, now) {
+    var d = s.d;
+    var dd = U.distP(s.pos, aimPos);
+    var a = Math.atan2(aimPos.y - s.pos.y, aimPos.x - s.pos.x);
+    // dispersion réelle du tir (visuel) : imprécision, stress, distance
+    var err = (1 - d.accuracy) * (0.02 + dd * 0.0022) * (1 + s.suppression) *
+              (1 + (1 - s.morale) * 0.6) / Math.max(0.25, quality);
+    a += (G.rng() * 2 - 1) * err;
+    var dx = Math.cos(a), dy = Math.sin(a);
+    var wallT = raycastWall(s.pos, dx, dy, d.maxFireRange * 1.3);
+
+    // probabilité de toucher, issue de la doctrine
+    var vis = Player.alive ? Player.visibility() : 0;
+    var ph = d.accuracy
+           * (1 - Math.min(0.62, dd / (d.maxFireRange * 1.25)))
+           * (0.55 + 0.45 * vis)
+           * (1 - 0.45 * s.suppression)
+           * (0.55 + 0.45 * s.morale)
+           * (0.30 + 0.70 * U.clamp(quality, 0, 1));
+    var hit = G.rng() < ph;
+
+    var end = { x: s.pos.x + dx * wallT, y: s.pos.y + dy * wallT };
+    if (hit && Player.alive) {
+      var qx = Player.pos.x - s.pos.x, qy = Player.pos.y - s.pos.y;
+      var tp = qx * dx + qy * dy;
+      if (tp > 0 && tp <= wallT && Math.abs(qx * dy - qy * dx) < CFG.player.r + 0.35) {
+        Player.damage(d.damage, now, s.id);
+        G.sparks.push({ x: Player.pos.x, y: Player.pos.y, born: now, ttl: 0.2, blood: true });
+      }
+    }
+    G.tracers.push({ a: { x: s.pos.x, y: s.pos.y }, b: end, born: now, ttl: 0.07, c: s.color });
+    G.muzzles.push({ x: s.pos.x, y: s.pos.y, a: a, born: now, ttl: 0.06, c: s.color });
+    // les camarades entendent le tir (ce n'est PAS une menace)
+    this.emitSound(s.pos, CFG.noise.gunshot, 'gunshot', 'ami:tir', now, false);
+  },
+
+  /** Rapport "sous le feu" : même une milice comprend qu'on lui tire dessus. */
+  reportUnderfire: function (s, now) {
+    if (now - s.lastRadioAt < 1.2) return;
+    if (G.rng() > 0.45 + 0.5 * s.d.discipline) return;
+    s.lastRadioAt = now;
+    var pos = s.lastThreatPos ? { x: s.lastThreatPos.x, y: s.lastThreatPos.y }
+                              : { x: s.pos.x, y: s.pos.y };
+    Radio.send({
+      from: s, to: 'all', kind: 'engaging', id: 'intrus', pos: pos,
+      posError: 7, confidence: 0.85, text: 'sous le feu !'
+    }, now);
+  }
+};
+
+/* --- exécution des intentions (moteur) -------------------------------- */
+var STATE_SPEED = {
+  PATROL: CFG.ai.speedPatrol, SUSPICIOUS: 0, INVESTIGATE: CFG.ai.speedInvestigate,
+  ENGAGE: CFG.ai.speedCombat, TAKE_COVER: CFG.ai.speedCombat,
+  SUPPRESS: CFG.ai.speedInvestigate, FLANK: CFG.ai.speedCombat,
+  SEARCH: CFG.ai.speedInvestigate, RETREAT: CFG.ai.speedInvestigate * 1.15,
+  FLEE: CFG.ai.speedFlee, CHECK_BODY: CFG.ai.speedInvestigate, DEAD: 0
+};
+
+function requestPath(s, goal) {
+  s.repathTimer = CFG.ai.repathInterval * (0.8 + 0.4 * G.rng());
+  s.pathGoal = { x: goal.x, y: goal.y };
+  var p = World.findPath(s.pos.x, s.pos.y, goal.x, goal.y);
+  s.path = p && p.length ? p : null;
+  s.pathIdx = 0;
+}
+
+function executeIntent(s, dt, now) {
+  var it = s.intent;
+  if (!s.alive) return;
+
+  // --- orientation ---
+  var wantAngle;
+  if (it.fire && it.aim) wantAngle = Math.atan2(it.aim.y - s.pos.y, it.aim.x - s.pos.x);
+  else if (it.face) wantAngle = Math.atan2(it.face.y - s.pos.y, it.face.x - s.pos.x);
+  else wantAngle = s.facing;
+  var rate = (s.state === 'PATROL' || s.state === 'SUSPICIOUS' || s.state === 'CHECK_BODY')
+    ? CFG.ai.turnRate : CFG.ai.turnRateAlert;
+  s.facing = U.rotTowards(s.facing, wantAngle, rate * dt);
+
+  // --- déplacement ---
+  var v = (STATE_SPEED[s.state] || 2) * it.speed;
+  if (it.crouch) v *= 0.55;
+  if (s.suppression > 0.5) v *= 0.8;
+  var tvx = 0, tvy = 0;
+  if (it.move && v > 0.001) {
+    if (!s.path || s.pathIdx >= s.path.length ||
+        (s.repathTimer <= 0 && (!s.pathGoal || U.distP(s.pathGoal, it.move) > 1.5))) {
+      requestPath(s, it.move);
+    }
+    var node = (s.path && s.pathIdx < s.path.length) ? s.path[s.pathIdx] : it.move;
+    if (s.path) {
+      while (s.pathIdx < s.path.length && U.distP(s.pos, s.path[s.pathIdx]) < CFG.ai.arriveDist) s.pathIdx++;
+      node = s.pathIdx < s.path.length ? s.path[s.pathIdx] : it.move;
+    }
+    var dx = node.x - s.pos.x, dy = node.y - s.pos.y;
+    var dd = Math.hypot(dx, dy) || 1;
+    var slow = Math.min(1, dd / 1.2);
+    tvx = (dx / dd) * v * slow;
+    tvy = (dy / dd) * v * slow;
+  } else {
+    s.path = null; s.pathGoal = null;
+  }
+
+  // séparation entre coéquipiers (les FS s'espacent, la milice se regroupe)
+  var sep = 0.35 + 1.3 * s.d.discipline;
+  if (v > 0.001) {
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var o = G.soldiers[i];
+      if (o === s || !o.alive) continue;
+      var d2 = U.dist2(o.pos.x, o.pos.y, s.pos.x, s.pos.y);
+      if (d2 > 2.56 || d2 < 1e-4) continue;
+      var d = Math.sqrt(d2);
+      var push = (1.6 - d) / 1.6 * sep * 2.0;
+      tvx += ((s.pos.x - o.pos.x) / d) * push;
+      tvy += ((s.pos.y - o.pos.y) / d) * push;
+    }
+  }
+  // pas de côté si bloqué
+  if (s.sidestepTimer > 0) {
+    s.sidestepTimer -= dt;
+    tvx += Math.cos(s.facing + Math.PI / 2) * 1.6 * s.sidestepDir;
+    tvy += Math.sin(s.facing + Math.PI / 2) * 1.6 * s.sidestepDir;
+  }
+
+  var k = 1 - Math.exp(-CFG.ai.accel * dt);
+  s.vel.x += (tvx - s.vel.x) * k;
+  s.vel.y += (tvy - s.vel.y) * k;
+  var ox = s.pos.x, oy = s.pos.y;
+  s.pos.x += s.vel.x * dt;
+  s.pos.y += s.vel.y * dt;
+  World.resolveCircle(s.pos, CFG.ai.radius);
+
+  // blocage : on force un nouveau chemin
+  var moved = U.dist(ox, oy, s.pos.x, s.pos.y);
+  if (it.move && v > 0.001 && moved < 0.04 * (dt * 60)) {
+    s.stuck += dt;
+    if (s.stuck > CFG.ai.stuckTime) {
+      s.stuck = 0;
+      s.path = null; s.repathTimer = 0;
+      s.sidestepTimer = 0.9;
+      s.sidestepDir = G.rng() < 0.5 ? 1 : -1;
+    }
+  } else if (moved > 0.01) s.stuck = 0;
+
+  // --- tir ---
+  if (it.fire && it.aim) {
+    if (s.burstLeft === 0 && !s.reloading && s.fireCd <= 0) {
+      var cd = s.d.fireCd * (0.85 + 0.3 * G.rng());
+      if (s.state === 'SUPPRESS') cd *= 1.7;          // on économise les munitions
+      s.fireCd = cd;
+      s.burstLeft = s.d.burst;
+      s.burstTimer = 0;
+      Combat.reportUnderfire(s, now);
+    }
+    s.lastAim = { x: it.aim.x, y: it.aim.y };
+    s.lastQuality = it.aimQuality;
+  }
+  if (s.burstLeft > 0) {
+    s.burstTimer -= dt;
+    if (s.burstTimer <= 0) {
+      Combat.fireOneShot(s, s.lastAim || it.aim, s.lastQuality || 0.4, now);
+      s.burstLeft--;
+      s.burstTimer = 0.09 + 0.05 * G.rng();
+      if (s.burstLeft === 0) {
+        s.reloading = true;
+        s.reloadTimer = s.d.reload * (0.7 + 0.6 * G.rng());
+      }
+    }
+  }
+  if (s.reloading) {
+    s.reloadTimer -= dt;
+    if (s.reloadTimer <= 0) s.reloading = false;
+  }
+}
+
+/* --- perception des cadavres ------------------------------------------ */
+function perceiveBodies(s, dt, now) {
+  var d = s.d;
+  var halfFov = (d.fov * Math.PI) / 360;
+  for (var i = 0; i < G.bodies.length; i++) {
+    var b = G.bodies[i];
+    if (b.of === s.id) continue;
+    if (b.foundBy[s.id]) continue;
+    var dd = U.distP(s.pos, b.pos);
+    if (dd > d.viewRange) continue;
+    var ang = Math.atan2(b.pos.y - s.pos.y, b.pos.x - s.pos.x);
+    var inCone = Math.abs(U.angleDiff(ang, s.facing)) <= halfFov || dd <= 6;
+    if (!inCone) continue;
+    if (!World.hasLineOfSight(s.pos, b.pos)) { s.bodyAware.set(b.id, 0); continue; }
+    var aw = (s.bodyAware.get(b.id) || 0) + (dt / d.reactionTime) * (1 - 0.6 * dd / d.viewRange);
+    s.bodyAware.set(b.id, aw);
+    if (aw >= 1) discoverBody(s, b, now);
+  }
+}
+
+function discoverBody(s, b, now) {
+  b.foundBy[s.id] = true;
+  if (!b.found) { b.found = true; b.foundAt = now; }
+  s.bodyAware.set(b.id, 1);
+  s.morale = U.clamp(s.morale + CFG.morale.bodyFound, 0, 1);
+  logEvent(s.id + ': CORPS DÉCOUVERT (' + b.of + ')');
+  s.pendingBodies.push({ id: b.id, pos: b.pos });
+  // alerte à voix haute pour les camarades proches
+  Radio.shout(s, 'un des nôtres est à terre !', now);
+  // rapport radio (une milice oublie souvent de le faire)
+  if (G.rng() < 0.35 + 0.6 * s.d.discipline) {
+    Radio.send({
+      from: s, to: 'command', kind: 'body', id: 'intrus',
+      pos: { x: s.pos.x, y: s.pos.y }, posError: 5, confidence: 0.9,
+      text: 'corps de ' + b.of + ' trouvé'
+    }, now);
+    Radio.send({
+      from: s, to: 'squad', kind: 'body', id: 'intrus',
+      pos: { x: s.pos.x, y: s.pos.y }, posError: 4, confidence: 0.9,
+      text: 'corps trouvé'
+    }, now);
+  }
+}
+
+/* --- cible de perception : la SEULE couche qui voit le joueur --------- */
+var TARGETS = [{ id: 'intrus', pos: { x: 0, y: 0 }, visibility: 1 }];
+
+function updateSoldier(s, dt, now) {
+  if (!s.alive) return;
+  s.stateTime += dt;
+  if (s.waitTimer > 0) s.waitTimer -= dt;
+  s.fireCd -= dt;
+  s.repathTimer -= dt;
+  s.flankTimer -= dt;
+  s.suppression = Math.max(0, s.suppression - CFG.ai.suppressedDecay * dt);
+
+  // 1) perception visuelle (couche autorisée à connaître le joueur)
+  if (Player.alive) {
+    TARGETS[0].pos.x = Player.pos.x;
+    TARGETS[0].pos.y = Player.pos.y;
+    TARGETS[0].visibility = Player.visibility();
+    var events = s.perception.update({ pos: s.pos, facing: s.facing }, TARGETS, dt, now);
+    for (var e = 0; e < events.length; e++) {
+      var ev = events[e];
+      if (ev.type === 'spotted') {
+        s.newStimulus = true;
+        s.stimulusKind = 'sight';
+        s.lastSightAt = now;
+        s.reactAt = now + s.d.reactionTime * (1 + (G.rng() * 2 - 1) * CFG.ai.reactionJitter);
+        logEvent(s.id + ': CONTACT VISUEL (réaction ' +
+                 U.fmt(Math.max(0, s.reactAt - now), 1) + ' s)');
+      } else if (ev.type === 'suspicious') {
+        s.lastStimulusAt = now;
+        s.stimulusKind = 'sight';
+        logEvent(s.id + ': mouvement aperçu');
+      } else if (ev.type === 'lost') {
+        if (isThreatId(ev.id)) logEvent(s.id + ': contact perdu (' + ev.id + ')');
+      }
+    }
+  }
+
+  // 2) perception des cadavres
+  perceiveBodies(s, dt, now);
+
+  // 3) cerveau, ~8 Hz et décalé d'un soldat à l'autre
+  s.brainAcc += dt;
+  if (s.brainAcc >= 1 / CFG.sim.brainHz) {
+    s.brainAcc -= 1 / CFG.sim.brainHz;
+    if (s.brainAcc > 0.25) s.brainAcc = 0;
+    var ctx = buildCtx(s, now, 1 / CFG.sim.brainHz);
+    var guarded = ctx;
+    if (CFG.debug.assertNoOmniscience) {
+      if (!s._ctxProxy) s._ctxProxy = makeCtxProxy(ctx);
+      guarded = s._ctxProxy;
+    }
+    Brain.think(s, guarded);
+  }
+
+  // 4) exécution
+  executeIntent(s, dt, now);
+}
+
+/* =====================================================================
+   11. RENDU & DEBUG UI
+   ===================================================================== */
+var Render = {
+  cv: null, ctx: null, P: CFG.world.px, cw: 0, ch: 0,
+
+  init: function () {
+    this.cv = document.getElementById('cv');
+    this.ctx = this.cv.getContext('2d');
+    this.cw = this.cv.width; this.ch = this.cv.height;
+  },
+
+  draw: function (now) {
+    var ctx = this.ctx, P = this.P, dbg = CFG.debug.on;
+    var W = this.cw, H = this.ch;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = CFG.colors.ground;
+    ctx.fillRect(0, 0, W, H);
+
+    if (dbg) {
+      ctx.strokeStyle = CFG.colors.grid; ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (var gx = 0; gx <= CFG.world.w; gx += 10) { ctx.moveTo(gx * P, 0); ctx.lineTo(gx * P, H); }
+      for (var gy = 0; gy <= CFG.world.h; gy += 10) { ctx.moveTo(0, gy * P); ctx.lineTo(W, gy * P); }
+      ctx.stroke();
+      if (CFG.debug.showCoverPoints) {
+        ctx.fillStyle = CFG.colors.cover;
+        for (var i = 0; i < World.cover.length; i++) {
+          ctx.fillRect(World.cover[i].x * P - 0.5, World.cover[i].y * P - 0.5, 1.5, 1.5);
+        }
+      }
+    }
+
+    // --- murs ---
+    for (var w = 0; w < World.walls.length; w++) {
+      var r = World.walls[w];
+      ctx.fillStyle = (r.kind === 'block') ? CFG.colors.crate : CFG.colors.wall;
+      ctx.fillRect(r.x * P, r.y * P, r.w * P, r.h * P);
+      ctx.strokeStyle = CFG.colors.wallTop; ctx.lineWidth = 1;
+      ctx.strokeRect(r.x * P, r.y * P, r.w * P, r.h * P);
+    }
+
+    // --- bruits ---
+    for (var n = 0; n < G.noises.length; n++) {
+      var ns = G.noises[n];
+      var age = (now - ns.born) / ns.life;
+      if (age > 1) continue;
+      ctx.strokeStyle = 'rgba(232,210,76,' + (0.30 * (1 - age)).toFixed(3) + ')';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(ns.x * P, ns.y * P, ns.r * age * P, 0, TAU);
+      ctx.stroke();
+    }
+
+    // --- cadavres ---
+    for (var b = 0; b < G.bodies.length; b++) {
+      var body = G.bodies[b];
+      if (!dbg && !World.hasLineOfSight(Player.pos, body.pos)) continue;
+      ctx.fillStyle = CFG.colors.body;
+      ctx.beginPath();
+      ctx.arc(body.pos.x * P, body.pos.y * P, 2.6, 0, TAU);
+      ctx.fill();
+      if (dbg) {
+        ctx.fillStyle = '#d98a8a'; ctx.font = '8px ui-monospace, monospace';
+        ctx.fillText(body.of + (body.found ? ' (vu)' : ''), body.pos.x * P + 4, body.pos.y * P - 4);
+      }
+    }
+
+    // --- chemins (debug) ---
+    if (dbg && CFG.debug.showPaths) {
+      ctx.setLineDash([2, 3]);
+      for (var q = 0; q < G.soldiers.length; q++) {
+        var sq = G.soldiers[q];
+        if (!sq.alive || !sq.path) continue;
+        ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(sq.pos.x * P, sq.pos.y * P);
+        for (var pi = sq.pathIdx; pi < sq.path.length; pi++) {
+          ctx.lineTo(sq.path[pi].x * P, sq.path[pi].y * P);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // --- mémoire des contacts (debug) ---
+    if (dbg) this.drawMemory(now);
+
+    // --- soldats ---
+    for (var k = 0; k < G.soldiers.length; k++) {
+      var s = G.soldiers[k];
+      if (!s.alive) continue;
+      if (!dbg && !World.hasLineOfSight(Player.pos, s.pos)) continue;
+      this.drawSoldier(s, now, dbg);
+    }
+
+    // --- joueur ---
+    this.drawPlayer(now);
+
+    // --- effets ---
+    for (var t = 0; t < G.tracers.length; t++) {
+      var tr = G.tracers[t];
+      var a = 1 - (now - tr.born) / tr.ttl;
+      if (a <= 0) continue;
+      ctx.strokeStyle = tr.c; ctx.globalAlpha = Math.max(0, a);
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(tr.a.x * P, tr.a.y * P); ctx.lineTo(tr.b.x * P, tr.b.y * P); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.fillStyle = '#ffd36b';
+    for (var sp = 0; sp < G.sparks.length; sp++) {
+      var sk = G.sparks[sp];
+      var sa = 1 - (now - sk.born) / sk.ttl;
+      if (sa <= 0) continue;
+      ctx.fillStyle = sk.blood ? 'rgba(224,90,76,' + sa.toFixed(2) + ')' : 'rgba(255,211,107,' + sa.toFixed(2) + ')';
+      ctx.beginPath(); ctx.arc(sk.x * P, sk.y * P, 1.6, 0, TAU); ctx.fill();
+    }
+    for (var mz = 0; mz < G.muzzles.length; mz++) {
+      var mz2 = G.muzzles[mz];
+      var ma = 1 - (now - mz2.born) / mz2.ttl;
+      if (ma <= 0) continue;
+      ctx.strokeStyle = 'rgba(255,240,180,' + ma.toFixed(2) + ')';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(mz2.x * P, mz2.y * P);
+      ctx.lineTo((mz2.x + Math.cos(mz2.a) * 1.6) * P, (mz2.y + Math.sin(mz2.a) * 1.6) * P);
+      ctx.stroke();
+    }
+    ctx.fillStyle = '#9aa';
+    for (var rk = 0; rk < G.rocks.length; rk++) {
+      ctx.beginPath(); ctx.arc(G.rocks[rk].x * P, G.rocks[rk].y * P, 1.6, 0, TAU); ctx.fill();
+    }
+
+    // --- radio (debug) ---
+    if (dbg) this.drawRadio(now);
+
+    // --- écart « vrai joueur / meilleure estimation » (debug) ---
+    if (dbg) this.drawIntelGap(now);
+
+    // --- HUD ---
+    if (dbg) { this.drawBanner(now); this.drawLog(now); this.drawCmdMarker(now); }
+    this.drawHud(now);
+  },
+
+  drawMemory: function (now) {
+    var ctx = this.ctx, P = this.P;
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var s = G.soldiers[i];
+      if (!s.alive) continue;
+      s.memory.contacts.forEach(function (c) {
+        var e = s.memory.estimate(c, now);
+        var conf = Math.max(0, Math.min(1, e.confidence));
+        var rad = Math.max(1.5, e.radius) * P;
+        ctx.fillStyle = hexA(s.color, 0.05 + 0.10 * conf);
+        ctx.strokeStyle = hexA(s.color, 0.12 + 0.35 * conf);
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(e.pos.x * P, e.pos.y * P, rad, 0, TAU); ctx.fill(); ctx.stroke();
+        if (conf > 0.45) {
+          ctx.fillStyle = hexA(s.color, 0.55);
+          ctx.font = '7px ui-monospace, monospace';
+          ctx.fillText(c.id + ' ' + U.pm(e.radius) + ' ' + U.fmt(e.age, 0) + 's',
+                       e.pos.x * P - rad, e.pos.y * P - rad - 2);
+        }
+      });
+    }
+  },
+
+  drawSoldier: function (s, now, dbg) {
+    var ctx = this.ctx, P = this.P;
+    var x = s.pos.x * P, y = s.pos.y * P, R = 3.2;
+
+    if (dbg && CFG.debug.showCones) {
+      var half = (s.d.fov * Math.PI) / 360;
+      var alpha = CFG.colors.cone + (s.state === 'PATROL' ? 0 : 0.035);
+      ctx.fillStyle = hexA(s.color, alpha);
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.arc(x, y, s.d.viewRange * P, s.facing - half, s.facing + half);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = hexA(s.color, 0.10);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // corps
+    ctx.fillStyle = s.color;
+    ctx.beginPath(); ctx.arc(x, y, R, 0, TAU); ctx.fill();
+    // direction du regard
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(s.facing) * R * 2.1, y + Math.sin(s.facing) * R * 2.1);
+    ctx.stroke();
+
+    if (!dbg) return;
+
+    // libellé d'état + note
+    var label = STATE_LABEL[s.state] || s.state;
+    ctx.font = '8px ui-monospace, monospace';
+    ctx.fillStyle = CFG.colors.text;
+    ctx.fillText(s.id + ' ' + label + (s.intent.note ? ' · ' + s.intent.note : ''), x + 5, y - 6);
+    if (s.orders.role !== 'none') {
+      ctx.fillStyle = hexA('#ffffff', 0.45);
+      ctx.fillText('rôle:' + s.orders.role, x + 5, y - 14);
+    }
+    // barre de moral
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x - 7, y + 5, 14, 2);
+    ctx.fillStyle = s.morale > 0.6 ? '#5fc98a' : (s.morale > s.d.flee ? '#e8b64c' : '#e05a4c');
+    ctx.fillRect(x - 7, y + 5, 14 * U.clamp(s.morale, 0, 1), 2);
+    // barre de vie
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(x - 7, y + 8, 14, 1.5);
+    ctx.fillStyle = '#c9d4e2';
+    ctx.fillRect(x - 7, y + 8, 14 * U.clamp(s.hp / s.maxHp, 0, 1), 1.5);
+    // réaction en cours
+    if (now < s.reactAt) {
+      ctx.fillStyle = '#e8b64c';
+      ctx.fillText('réaction ' + U.fmt(Math.max(0, s.reactAt - now), 1) + 's', x + 5, y + 14);
+    }
+    if (s.suppression > 0.05) {
+      ctx.fillStyle = 'rgba(224,90,76,0.8)';
+      ctx.fillText('suppr.', x + 5, y + 21);
+    }
+  },
+
+  drawPlayer: function (now) {
+    var ctx = this.ctx, P = this.P;
+    var p = Player;
+    if (!p.alive) return;
+    var x = p.pos.x * P, y = p.pos.y * P;
+    // ligne de visée
+    ctx.strokeStyle = 'rgba(232,232,232,0.18)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(p.aim.x * P, p.aim.y * P); ctx.stroke();
+    ctx.setLineDash([]);
+    // corps
+    ctx.fillStyle = CFG.colors.player;
+    ctx.beginPath();
+    ctx.arc(x, y, p.crouch ? 2.4 : 3.2, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = CFG.colors.player; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(x, y);
+    ctx.lineTo(x + Math.cos(p.facing) * 7, y + Math.sin(p.facing) * 7);
+    ctx.stroke();
+    if (CFG.debug.on) {
+      ctx.font = '8px ui-monospace, monospace';
+      ctx.fillStyle = '#e8e8e8';
+      ctx.fillText('J1' + (p.crouch ? ' (accroupi)' : (p.sprint ? ' (sprint)' : '')), x + 5, y - 6);
+    }
+  },
+
+  drawRadio: function (now) {
+    var ctx = this.ctx, P = this.P;
+    ctx.font = '7px ui-monospace, monospace';
+    for (var i = 0; i < G.radioFx.length; i++) {
+      var f = G.radioFx[i];
+      var a = 1 - (now - f.born) / f.ttl;
+      if (a <= 0) continue;
+      ctx.strokeStyle = f.lost ? 'rgba(224,90,76,' + a.toFixed(2) + ')'
+                               : 'rgba(95,201,138,' + a.toFixed(2) + ')';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.moveTo(f.a.x * P, f.a.y * P); ctx.lineTo(f.b.x * P, f.b.y * P);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = f.lost ? 'rgba(224,90,76,' + a.toFixed(2) + ')'
+                             : 'rgba(95,201,138,' + a.toFixed(2) + ')';
+      ctx.fillText(f.text, (f.a.x + f.b.x) / 2 * P + 3, (f.a.y + f.b.y) / 2 * P - 3);
+    }
+  },
+
+  /** Vraie position du joueur vs meilleure croyance ennemie. */
+  drawIntelGap: function (now) {
+    var ctx = this.ctx, P = this.P;
+    var best = null, bestScore = -1;
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var s = G.soldiers[i];
+      if (!s.alive) continue;
+      s.memory.contacts.forEach(function (c) {
+        if (!isThreatId(c.id)) return;
+        var e = s.memory.estimate(c, now);
+        var sc = e.confidence / (1 + e.age * 0.1);
+        if (sc > bestScore) { bestScore = sc; best = { s: s, e: e, c: c }; }
+      });
+    }
+    if (!best) return;
+    var px = Player.pos.x * P, py = Player.pos.y * P;
+    var ex = best.e.pos.x * P, ey = best.e.pos.y * P;
+    var rad = Math.max(2, best.e.radius) * P;
+    ctx.strokeStyle = 'rgba(232,180,76,0.85)';
+    ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(ex, ey, rad, 0, TAU); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(ex, ey); ctx.lineTo(px, py); ctx.stroke();
+    ctx.setLineDash([]);
+    // croix sur la position vraie
+    ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px - 4, py); ctx.lineTo(px + 4, py);
+    ctx.moveTo(px, py - 4); ctx.lineTo(px, py + 4);
+    ctx.stroke();
+    var gap = U.distP(Player.pos, best.e.pos);
+    ctx.font = '8px ui-monospace, monospace';
+    ctx.fillStyle = '#e8b64c';
+    ctx.fillText('croyance ' + best.s.id + ' : écart ' + U.fmt(gap, 1) + ' m, ' +
+                 U.pm(best.e.radius) + ', conf ' + U.fmt(best.e.confidence, 2),
+                 6, 26);
+  },
+
+  drawCmdMarker: function (now) {
+    var ctx = this.ctx, P = this.P;
+    ctx.font = '8px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(95,201,138,0.75)';
+    ctx.fillText('CMD', RADIO_CMD_MARKER.x * P, RADIO_CMD_MARKER.y * P - 6);
+    ctx.strokeStyle = 'rgba(95,201,138,0.35)';
+    ctx.beginPath();
+    ctx.arc(RADIO_CMD_MARKER.x * P, RADIO_CMD_MARKER.y * P, 3, 0, TAU);
+    ctx.stroke();
+  },
+
+  drawBanner: function (now) {
+    var ctx = this.ctx;
+    var name = Command.levelName();
+    var col = ['#7b8798', '#e8d24c', '#e8a54c', '#e05a4c'][Command.level];
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = col;
+    var txt = 'ALERTE : ' + name +
+      (Command.reportedPos ? '   ·   dernière position rapportée (' +
+        Math.round(Command.reportedPos.x) + ',' + Math.round(Command.reportedPos.y) + ') il y a ' +
+        U.fmt(now - Command.reportedAt, 0) + ' s' : '   ·   aucune position rapportée');
+    ctx.textAlign = 'center';
+    ctx.fillText(txt, this.cw / 2, 14);
+    ctx.textAlign = 'left';
+  },
+
+  drawLog: function (now) {
+    var ctx = this.ctx;
+    ctx.font = '9px ui-monospace, monospace';
+    var lines = G.log.slice(-CFG.debug.logLines);
+    var y = this.ch - 8 - (lines.length - 1) * 11;
+    for (var i = 0; i < lines.length; i++) {
+      var a = 0.35 + 0.65 * ((i + 1) / lines.length);
+      ctx.fillStyle = 'rgba(201,212,226,' + a.toFixed(2) + ')';
+      ctx.fillText('[' + U.fmt(lines[i].t, 1) + 's] ' + lines[i].text, 6, y + i * 11);
+    }
+  },
+
+  drawHud: function (now) {
+    var ctx = this.ctx;
+    ctx.font = '9px ui-monospace, monospace';
+    // barre de vie du joueur
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(6, this.ch - 4 - 8 * 0, 100, 4);
+    ctx.fillStyle = Player.hp > 60 ? '#5fc98a' : (Player.hp > 25 ? '#e8b64c' : '#e05a4c');
+    ctx.fillRect(6, this.ch - 4, 100 * U.clamp(Player.hp / 100, 0, 1), 4);
+    // infos
+    ctx.fillStyle = 'rgba(201,212,226,0.75)';
+    var t = 'x' + Loop.scale().toFixed(2).replace(/0+$/, '').replace(/\.$/, '') +
+            (Loop.paused ? ' PAUSE' : '') + '  graine ' + G.seed;
+    ctx.fillText(t, 112, this.ch - 1);
+  }
+};
+
+/** #rrggbb + alpha -> rgba() */
+function hexA(hex, a) {
+  if (hex.charAt(0) !== '#') return hex;
+  var r = parseInt(hex.substr(1, 2), 16), g = parseInt(hex.substr(3, 2), 16), b = parseInt(hex.substr(5, 2), 16);
+  return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+}
+
+/* =====================================================================
+   12. SCÉNARIO & SELF-TESTS
+   ===================================================================== */
+function logEvent(text) {
+  G.log.push({ t: G.time, text: text });
+  if (G.log.length > 240) G.log.shift();
+}
+
+function mkSoldier(id, doctrine, squadId, x, y, opts) {
+  opts = opts || {};
+  var s = new Soldier({
+    id: id, doctrine: doctrine, squadId: squadId, x: x, y: y,
+    facing: opts.facing || 0, waypoints: opts.waypoints || null,
+    isStatic: !!opts.isStatic, rally: opts.rally || null,
+    released: opts.released !== false
+  });
+  G.soldiers.push(s);
+  return s;
+}
+
+var Scenario = {
+  /* --- géométrie de la zone (rectangles alignés uniquement) --------- */
+  buildWorld: function () {
+    World.reset();
+    // enceinte de l'avant-poste : x 45..105, y 25..65
+    World.addWall(45, 25, 105, 25, 'wall');          // mur nord
+    World.addWall(45, 65, 70, 65, 'wall');           // mur sud ouest
+    World.addWall(78, 65, 105, 65, 'wall');          // mur sud est  → PORTAIL x 70..78
+    World.addWall(45, 25, 45, 40, 'wall');           // mur ouest nord
+    World.addWall(45, 46, 45, 65, 'wall');           // mur ouest sud → BRÈCHE y 40..46
+    World.addWall(105, 25, 105, 65, 'wall');         // mur est
+    // bâtiment principal : x 60..85, y 32..48, porte au sud (x 68..72)
+    World.addWall(60, 32, 85, 32, 'wall');
+    World.addWall(60, 48, 68, 48, 'wall');
+    World.addWall(72, 48, 85, 48, 'wall');
+    World.addWall(60, 32, 60, 48, 'wall');
+    World.addWall(85, 32, 85, 48, 'wall');
+    // caserne : x 115..135, y 55..75, porte à l'ouest (y 64..70)
+    World.addWall(115, 55, 135, 55, 'wall');
+    World.addWall(115, 75, 135, 75, 'wall');
+    World.addWall(115, 55, 115, 64, 'wall');
+    World.addWall(115, 70, 115, 75, 'wall');
+    World.addWall(135, 55, 135, 75, 'wall');
+    // caisses : couverture dans la cour (ouest/sud, on laisse libre
+    // l'approche nord-est de la sentinelle)
+    World.addBlock(49, 52, 4, 3, 'block');
+    World.addBlock(49, 34, 5, 3, 'block');
+    World.addBlock(60, 56, 6, 3, 'block');
+    // rochers : zone de départ du joueur (10;78)
+    World.addBlock(7, 74, 2.5, 2, 'block');
+    World.addBlock(14, 82, 3, 2, 'block');
+    World.addBlock(21, 71, 2, 3, 'block');
+    World.addBlock(4, 85, 2.5, 2.5, 'block');
+    World.addBlock(26, 84, 3, 2, 'block');
+    World.addBlock(30, 68, 4, 2, 'block');
+    World.addBlock(18, 61, 3, 2, 'block');
+    World.addBlock(12, 65, 2, 2, 'block');
+    // couverture extérieure (approches)
+    World.addBlock(66, 70, 3, 2, 'block');
+    World.addBlock(88, 69, 3, 2, 'block');
+    World.addBlock(50, 71, 3, 2, 'block');
+    World.addBlock(120, 20, 3, 2, 'block');
+    World.addBlock(128, 36, 4, 2, 'block');
+    World.addBlock(112, 44, 3, 2, 'block');
+    World.build();
+  },
+
+  spawnForces: function () {
+    G.soldiers.length = 0;
+    G.squads = {};
+
+    // --- escouade de milice M : 4 hommes ---
+    var M = new Squad('M', 'militia');
+    M.rally = { x: 70, y: 55 };
+    M.add(mkSoldier('M1', 'militia', 'M', 50, 60, {
+      waypoints: [{ x: 50, y: 60 }, { x: 66, y: 62 }, { x: 82, y: 60 }, { x: 62, y: 57 }],
+      facing: 0, rally: { x: 70, y: 55 }
+    }));
+    M.add(mkSoldier('M2', 'militia', 'M', 84, 58, {
+      waypoints: [{ x: 84, y: 58 }, { x: 60, y: 60 }, { x: 52, y: 52 }, { x: 74, y: 56 }],
+      facing: Math.PI, rally: { x: 70, y: 55 }
+    }));
+    // sentinelle isolée au nord-est de la cour (test d'élimination discrète)
+    M.add(mkSoldier('M3', 'militia', 'M', 95, 30, {
+      isStatic: true, facing: -Math.PI / 2, rally: { x: 95, y: 30 }
+    }));
+    // factionnaire dans le bâtiment principal
+    M.add(mkSoldier('M4', 'militia', 'M', 70, 40, {
+      waypoints: [{ x: 65, y: 36 }, { x: 80, y: 36 }, { x: 80, y: 45 }, { x: 65, y: 45 }],
+      facing: 0, rally: { x: 72, y: 40 }
+    }));
+
+    // --- escouade régulière R : 3 hommes, en caserne, non libérés ---
+    var R = new Squad('R', 'regular');
+    R.rally = { x: 125, y: 65 };
+    R.add(mkSoldier('R1', 'regular', 'R', 120, 60, {
+      waypoints: [{ x: 119, y: 58 }, { x: 131, y: 58 }, { x: 131, y: 72 }, { x: 119, y: 72 }],
+      facing: 0, rally: { x: 125, y: 65 }, released: false
+    }));
+    R.add(mkSoldier('R2', 'regular', 'R', 128, 64, {
+      waypoints: [{ x: 131, y: 72 }, { x: 119, y: 72 }, { x: 119, y: 58 }, { x: 131, y: 58 }],
+      facing: Math.PI, rally: { x: 125, y: 65 }, released: false
+    }));
+    R.add(mkSoldier('R3', 'regular', 'R', 122, 70, {
+      waypoints: [{ x: 126, y: 68 }, { x: 118, y: 72 }],
+      facing: Math.PI / 2, rally: { x: 125, y: 65 }, released: false
+    }));
+
+    G.squads.M = M;
+    G.squads.R = R;
+    G.squads.S = null;
+  },
+
+  /** Le commandement libère les réguliers : ils vont au point RAPPORTÉ. */
+  releaseRegulars: function (now) {
+    var R = G.squads.R;
+    if (!R) return;
+    var dest = Command.reportedPos ? { x: Command.reportedPos.x, y: Command.reportedPos.y }
+                                   : { x: 75, y: 45 };
+    R.objective = { pos: dest, at: now };
+    for (var i = 0; i < R.members.length; i++) {
+      var m = R.members[i];
+      if (!m.alive) continue;
+      m.released = true;
+      m.path = null;
+      m.orders.objective = dest;
+      m.orders.role = 'assault';
+    }
+    logEvent('CMD: escouade R libérée → position rapportée (' +
+             Math.round(dest.x) + ',' + Math.round(dest.y) + ')');
+  },
+
+  /** Arrivée des forces spéciales par le bord nord-est. */
+  spawnSF: function (now) {
+    var S = new Squad('S', 'sf');
+    var e = CFG.command.sfEntry;
+    var dest = Command.reportedPos ? { x: Command.reportedPos.x, y: Command.reportedPos.y }
+                                   : { x: 75, y: 45 };
+    S.rally = { x: e.x, y: e.y };
+    var spots = [{ x: e.x - 2, y: e.y + 2 }, { x: e.x - 1, y: e.y + 5 }, { x: e.x - 4, y: e.y + 4 }];
+    for (var i = 0; i < 3; i++) {
+      var p = World.nearestFree(spots[i].x, spots[i].y);
+      var s = mkSoldier('S' + (i + 1), 'sf', 'S', p.x, p.y, { facing: Math.PI * 0.75 });
+      s.rally = { x: e.x, y: e.y };
+      S.add(s);
+    }
+    S.objective = { pos: dest, at: now };
+    G.squads.S = S;
+    S.plan(now, dest);
+    logEvent('CMD: forces spéciales sur la zone (' + Math.round(dest.x) + ',' +
+             Math.round(dest.y) + ') — position rapportée il y a ' +
+             U.fmt(now - Command.reportedAt, 0) + ' s');
+  },
+
+  reset: function (seed) {
+    G.seed = seed >>> 0;
+    G.rng = U.mulberry32(G.seed);
+    G.time = 0;
+    G.soldiers.length = 0;
+    G.bodies.length = 0; G.noises.length = 0; G.tracers.length = 0;
+    G.sparks.length = 0; G.muzzles.length = 0; G.rocks.length = 0;
+    G.radioFx.length = 0; G.log.length = 0;
+    Radio.reset();
+    Command.reset();
+    this.buildWorld();
+    Player.reset();
+    Player.aim.x = 40; Player.aim.y = 78;
+    this.spawnForces();
+    Loop.paused = false;
+    UI.hideOverlay();
+    logEvent('scénario initialisé (graine ' + G.seed + ')');
+  }
+};
+
+/* --- 12b. SELF-TESTS (?test=1) --------------------------------------- */
+function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion échouée'); }
+function shallow(o, extra) {
+  var r = {};
+  for (var k in o) r[k] = o[k];
+  if (extra) for (var k2 in extra) r[k2] = extra[k2];
+  return r;
+}
+function perfNow() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+function tmpSoldier(doctrine, x, y, extra) {
+  var s = new Soldier({ id: 'T_' + doctrine, doctrine: doctrine, squadId: '_T', x: x, y: y, facing: 0 });
+  if (extra) s.d = shallow(s.d, extra);
+  s.perception.d = s.d;
+  return s;
+}
+
+var Tests = {
+  results: [],
+
+  T: function (name, fn) {
+    var r = { name: name, ok: true, msg: '' };
+    try { fn(); }
+    catch (e) { r.ok = false; r.msg = (e && e.message) ? e.message : String(e); }
+    this.results.push(r);
+    return r;
+  },
+
+  run: function () {
+    this.results.length = 0;
+    var self = this;
+
+    /* ---------- géométrie ---------- */
+    this.T('géométrie : segment vs rectangle', function () {
+      assert(U.segRect(0, 0, 10, 0, { x: 4, y: -1, w: 2, h: 2 }) === true, 'devrait couper');
+      assert(U.segRect(0, 0, 10, 0, { x: 4, y: 1, w: 2, h: 2 }) === false, 'ne devrait pas couper');
+      assert(U.segRect(0, 0, 0, 10, { x: -1, y: 4, w: 2, h: 2 }) === true, 'vertical');
+      var t = raySlab(0, 0, 1, 0, { x: 4, y: -1, w: 2, h: 2 }, 100);
+      assert(Math.abs(t - 4) < 1e-6, 'distance d\'impact = 4, obtenu ' + t);
+      assert(raySlab(0, 0, 0, 1, { x: 4, y: -1, w: 2, h: 2 }, 100) === -1, 'pas d\'impact');
+    });
+
+    /* ---------- ligne de vue ---------- */
+    this.T('LOS : bloquée par l\'enceinte, libre par le portail et la brèche', function () {
+      assert(World.hasLineOfSight({ x: 45, y: 10 }, { x: 45, y: 40 }) === false, 'mur nord');
+      assert(World.hasLineOfSight({ x: 95, y: 30 }, { x: 95, y: 60 }) === true, 'cour dégagée');
+      assert(World.hasLineOfSight({ x: 74, y: 70 }, { x: 74, y: 50 }) === true, 'portail');
+      assert(World.hasLineOfSight({ x: 40, y: 43 }, { x: 50, y: 43 }) === true, 'brèche');
+      assert(World.hasLineOfSight({ x: 40, y: 30 }, { x: 50, y: 30 }) === false, 'mur ouest');
+      assert(World.hasLineOfSight({ x: 70, y: 55 }, { x: 70, y: 40 }) === true, 'porte du bâtiment');
+    });
+
+    this.T('occlusion : -0,45 par mur traversé (plancher 0)', function () {
+      var a = World.occlusion({ x: 95, y: 30 }, { x: 95, y: 10 });
+      assert(Math.abs(a - 0.55) < 1e-6, '1 mur attendu 0.55, obtenu ' + a);
+      var b = World.occlusion({ x: 125, y: 65 }, { x: 95, y: 30 });
+      assert(Math.abs(b - 0.10) < 1e-6, '2 murs attendu 0.10, obtenu ' + b);
+      // caserne → intérieur du bâtiment : 3 murs (caserne O, enceinte E, bâtiment E)
+      var c = World.occlusion({ x: 125, y: 65 }, { x: 70, y: 40 });
+      assert(c === 0, '3 murs → 0, obtenu ' + c);
+      assert(World.occlusion({ x: 60, y: 60 }, { x: 100, y: 60 }) === 1, 'cour dégagée → 1');
+    });
+
+    /* ---------- A* ---------- */
+    this.T('A* : chemin trouvé, contournant les murs et lissé', function () {
+      var p = World.findPath(10, 78, 95, 30);
+      assert(p && p.length >= 2, 'chemin non trouvé');
+      var d0 = U.dist(10, 78, 95, 30);
+      var len = 0;
+      for (var i = 1; i < p.length; i++) {
+        len += U.distP(p[i - 1], p[i]);
+        assert(World.segmentClear(p[i - 1], p[i], CFG.ai.radius * 0.85),
+               'segment du chemin coupant un mur : ' + JSON.stringify(p[i - 1]) + '→' + JSON.stringify(p[i]));
+      }
+      assert(len >= d0 - 0.5, 'le chemin ne peut pas être plus court que la droite');
+      var raw = World.findPath(10, 78, 95, 30);
+      assert(raw.length <= 40, 'chemin lissé trop découpé : ' + raw.length + ' points');
+    });
+
+    this.T('A* : cherche un point libre quand la destination est dans un mur', function () {
+      var p = World.findPath(20, 78, 46, 25.0);
+      assert(p === null || p.length >= 1, 'doit renvoyer null ou un chemin');
+      var f = World.nearestFree(46, 25);
+      assert(World.isFree(f.x, f.y), 'nearestFree doit renvoyer un point libre');
+    });
+
+    /* ---------- couverture ---------- */
+    this.T('couverture : score selon le mode (se cacher / tirer)', function () {
+      var threat = { x: 95, y: 45 }, self = { x: 70, y: 55 };
+      var hidden = null, exposed = null;
+      for (var i = 0; i < World.cover.length; i++) {
+        var cp = World.cover[i];
+        if (U.distP(cp, self) > 30) continue;
+        if (!World.isFree(cp.x, cp.y)) continue;
+        if (World.hasLineOfSight(cp, threat)) { if (!exposed) exposed = cp; }
+        else if (!hidden) hidden = cp;
+      }
+      assert(hidden && exposed, 'échantillon de couverture insuffisant');
+      var sh = World.coverScore(hidden, self, threat, { mode: 'hide', maxDist: 30 });
+      var se = World.coverScore(exposed, self, threat, { mode: 'hide', maxDist: 30 });
+      assert(sh > se, 'en mode "se cacher", un point masqué doit marquer plus (' + sh + ' vs ' + se + ')');
+      var fh = World.coverScore(hidden, self, threat, { mode: 'fire', maxDist: 30 });
+      var fe = World.coverScore(exposed, self, threat, { mode: 'fire', maxDist: 30 });
+      assert(fe > fh, 'en mode "tirer", un point avec ligne de tir doit marquer plus');
+      assert(World.findCover(self, threat, { mode: 'hide', maxDist: 30 }) !== null, 'findCover doit trouver');
+    });
+
+    /* ---------- perception ---------- */
+    this.T('perception : un bruit crée un contact imprécis (erreur croissante)', function () {
+      var near = tmpSoldier('militia', 60, 50);
+      var c1 = near.perception.hear(near, { pos: { x: 63, y: 50 }, loudness: 30, kind: 'impact' }, 0);
+      assert(c1 !== null, 'le bruit proche doit être entendu');
+      var far = tmpSoldier('militia', 60, 50);
+      var c2 = far.perception.hear(far, { pos: { x: 80, y: 50 }, loudness: 30, kind: 'impact' }, 0);
+      assert(c2 !== null, 'le bruit lointain doit être entendu');
+      assert(c2.posError > c1.posError,
+             'l\'erreur grandit avec la distance (' + c1.posError + ' vs ' + c2.posError + ')');
+      // précision de localisation selon la doctrine
+      var acc = tmpSoldier('sf', 60, 50);
+      var c3 = acc.perception.hear(acc, { pos: { x: 80, y: 50 }, loudness: 30, kind: 'impact' }, 0);
+      assert(c3 !== null && c3.posError < c2.posError, 'une FS localise mieux qu\'une milice');
+    });
+
+    this.T('perception : portée = portée du son × portée d\'ouïe × occlusion', function () {
+      // soldat à l'ouest de l'enceinte : un mur (enceinte ouest) le sépare de la cour
+      var s = tmpSoldier('regular', 40, 50);
+      assert(Math.abs(World.occlusion(s.pos, { x: 55, y: 50 }) - 0.55) < 1e-9, 'un mur entre les deux');
+      // pas (portée 6 m) à 15 m derrière un mur : 6 × 0,55 = 3,3 m → inaudible
+      assert(s.perception.hear(s, { pos: { x: 55, y: 50 }, loudness: 6, kind: 'footstep', sourceId: 'intrus' }, 0) === null,
+             'un pas derrière un mur ne doit pas porter à 15 m');
+      // coup de feu (90 m) derrière le même mur : 90 × 0,55 = 49,5 m → audible
+      var c = s.perception.hear(s, { pos: { x: 55, y: 50 }, loudness: 90, kind: 'gunshot', sourceId: 'intrus' }, 0);
+      assert(c !== null, 'un coup de feu derrière un mur doit porter à 15 m');
+      // intérieur du bâtiment : 2 murs (enceinte ouest + mur du bâtiment) → 90 × 0,1 = 9 m
+      assert(s.perception.hear(s, { pos: { x: 70, y: 40 }, loudness: 90, kind: 'gunshot', sourceId: 'intrus' }, 0) === null,
+             'deux murs doivent étouffer le coup de feu (33 m)');
+    });
+
+    this.T('perception : la jauge monte jusqu\'au repérage, moins vite accroupi', function () {
+      var a = tmpSoldier('regular', 70, 40), b = tmpSoldier('regular', 70, 40);
+      a.facing = Math.PI / 2; b.facing = Math.PI / 2;
+      var ta = [{ id: 'intrus', pos: { x: 70, y: 45 }, visibility: 1.0 }];
+      var tb = [{ id: 'intrus', pos: { x: 70, y: 45 }, visibility: 0.35 }];
+      var now = 0, dt = 1 / 60, spotted = false;
+      for (var i = 0; i < 120; i++) {
+        now += dt;
+        var ea = a.perception.update({ pos: a.pos, facing: a.facing }, ta, dt, now);
+        b.perception.update({ pos: b.pos, facing: b.facing }, tb, dt, now);
+        for (var k = 0; k < ea.length; k++) if (ea[k].type === 'spotted') spotted = true;
+      }
+      assert(spotted, 'debout, la cible doit être repérée en 2 s');
+      var aa = a.perception.awareness.get('intrus') || 0;
+      var ab = b.perception.awareness.get('intrus') || 0;
+      assert(aa > ab, 'la jauge monte moins vite accroupi (' + aa + ' vs ' + ab + ')');
+      assert(a.memory.contacts.get('intrus').source === 'sight', 'source = sight');
+    });
+
+    this.T('perception : décroissance de la confiance et oubli du contact', function () {
+      var s = tmpSoldier('regular', 70, 40);
+      s.memory.report({ id: 'intrus', pos: { x: 70, y: 45 }, source: 'sound', confidence: 0.8, posError: 3 }, 0);
+      var now = 0;
+      var c = s.memory.contacts.get('intrus');
+      var e0 = s.memory.estimate(c, 0);
+      for (var i = 0; i < 60 * 20; i++) { now += 1 / 60; s.memory.update(now, 1 / 60); }
+      var e1 = s.memory.estimate(s.memory.contacts.get('intrus') || c, now);
+      assert(e1.radius > e0.radius, 'l\'incertitude grandit avec l\'âge');
+      assert(e1.confidence < e0.confidence, 'la confiance décroît');
+      for (i = 0; i < 60 * 40; i++) { now += 1 / 60; s.memory.update(now, 1 / 60); }
+      assert(s.memory.contacts.size === 0, 'le contact doit être oublié après ' + s.memory.forgetAfter + ' s');
+    });
+
+    /* ---------- radio ---------- */
+    this.T('radio : livraison après le délai de doctrine, jamais avant', function () {
+      var a = tmpSoldier('regular', 70, 40), b = tmpSoldier('regular', 72, 40);
+      var sq = new Squad('_T', 'regular'); sq.add(a); sq.add(b);
+      G.squads['_T'] = sq;
+      var now = 0;
+      var m = Radio.send({
+        from: a, to: 'squad', kind: 'contact', id: 'intrus',
+        pos: { x: 60, y: 50 }, posError: 4, confidence: 0.9, text: 'test'
+      }, now);
+      assert(m.deliverAt >= 1.0 && m.deliverAt <= 2.0,
+             'délai régulier dans [1;2] s, obtenu ' + m.deliverAt);
+      Radio.update(now + 0.5);
+      assert(b.memory.contacts.size === 0, 'rien ne doit arriver avant le délai');
+      Radio.update(m.deliverAt + 0.01);
+      assert(b.memory.contacts.size === 1, 'le message doit être livré après le délai');
+      var c = b.memory.contacts.get('intrus');
+      assert(c.posError >= 9 - 1e-6, 'info dégradée : +5 m d\'erreur (obtenu ' + c.posError + ')');
+      assert(c.confidence <= 0.9 * 0.7 + 1e-6, 'confiance réduite à 70 %');
+      assert(c.source === 'radio', 'source = radio');
+      delete G.squads['_T'];
+    });
+
+    this.T('radio : la milice perd une partie de ses messages', function () {
+      var a = tmpSoldier('militia', 70, 40), b = tmpSoldier('militia', 72, 40);
+      a.d = shallow(a.d, { radioMin: 0, radioMax: 0 });
+      var sq = new Squad('_T', 'militia'); sq.add(a); sq.add(b);
+      G.squads['_T'] = sq;
+      var before = Radio.lost, N = 300, now = 0;
+      for (var i = 0; i < N; i++) {
+        Radio.send({
+          from: a, to: 'squad', kind: 'contact', id: 'z' + i,
+          pos: { x: 60, y: 50 }, posError: 2, confidence: 0.5, text: 't'
+        }, now);
+        Radio.update(now + 0.001);
+      }
+      var lost = Radio.lost - before;
+      assert(lost > N * 0.05 && lost < N * 0.55,
+             'perte attendue ~25 % (obtenue ' + U.fmt(100 * lost / N, 1) + ' %)');
+      delete G.squads['_T'];
+      Radio.queue.length = 0;
+    });
+
+    /* ---------- commandement ---------- */
+    this.T('command : montée par rapports reçus puis déclin progressif', function () {
+      Command.reset();
+      var now = 0;
+      Command.report('suspicious', { pos: { x: 1, y: 1 } }, now);
+      assert(Command.level === 1, 'SUSPICIOUS attendu');
+      Command.report('contact', { pos: { x: 2, y: 2 }, posError: 5 }, now);
+      assert(Command.level === 2, 'ALERT attendu');
+      Command.report('engaging', { pos: { x: 3, y: 3 } }, now);
+      assert(Command.level === 3, 'COMBAT attendu');
+      assert(Command.reportedPos.x === 3, 'dernière position rapportée mémorisée');
+      var t = 0.1, seq = [], prev;
+      for (var i = 0; i < 2000 && Command.level > 0; i++) {
+        t += 0.1; prev = Command.level;
+        Command.update(0.1, t);
+        if (Command.level !== prev) seq.push(Command.level);
+      }
+      assert(seq.join(',') === '2,1,0', 'déclin attendu 2,1,0 — obtenu ' + seq.join(','));
+    });
+
+    /* ---------- NON-OMNISCIENCE ---------- */
+    this.T('cerveau : le ctx ne contient aucune référence au joueur', function () {
+      for (var i = 0; i < G.soldiers.length; i++) {
+        var s = G.soldiers[i];
+        var ctx = buildCtx(s, G.time, 0.125);
+        assert(!('player' in ctx), 'clé player présente dans ctx');
+        assert(!('Player' in ctx), 'clé Player présente dans ctx');
+        var bad = [];
+        var seen = new Set();
+        (function walk(o, depth, path) {
+          if (!o || typeof o !== 'object' || depth > 4) return;
+          if (seen.has(o)) return;
+          seen.add(o);
+          if (o === Player) { bad.push(path); return; }
+          for (var k in o) {
+            if (k === 'player' || k === 'Player') { bad.push(path + '.' + k); continue; }
+            walk(o[k], depth + 1, path + '.' + k);
+          }
+        })(ctx, 0, 'ctx');
+        assert(bad.length === 0, 'référence au joueur trouvée : ' + bad.join(', '));
+      }
+    });
+
+    this.T('cerveau : le code du cerveau ne cite jamais le joueur', function () {
+      var fns = [Brain.think, updateMorale, bestThreat, setState, scanFacing,
+                 maybeReportContact, maybeReportSuspicion, computeFlankPoint, isThreatId];
+      for (var k in TRANSITIONS) fns.push(TRANSITIONS[k]);
+      for (var k2 in HANDLERS) fns.push(HANDLERS[k2]);
+      var src = '';
+      for (var i = 0; i < fns.length; i++) src += fns[i].toString() + '\n';
+      assert(!/Player/.test(src), 'identifiant Player dans le cerveau');
+      assert(!/G\.player/.test(src), 'accès G.player dans le cerveau');
+      assert(!/G\[\s*['"]player['"]\s*\]/.test(src), 'accès G["player"] dans le cerveau');
+      assert(!/G\.Player/.test(src), 'accès G.Player dans le cerveau');
+    });
+
+    this.T('cerveau : aucun accès au joueur à l\'exécution (proxy piégé)', function () {
+      var real = G.player, reads = 0, err = null;
+      var trap = new Proxy(real, {
+        get: function (t, k) { reads++; return t[k]; },
+        set: function (t, k, v) { reads++; t[k] = v; return true; }
+      });
+      G.player = trap;
+      try {
+        for (var i = 0; i < G.soldiers.length; i++) {
+          var s = G.soldiers[i];
+          if (!s.alive) continue;
+          var ctx = buildCtx(s, G.time, 0.125);
+          Brain.think(s, makeCtxProxy(ctx));
+        }
+      } catch (e) { err = e; }
+      G.player = real;
+      assert(!err, 'exception : ' + (err && err.message));
+      assert(reads === 0, 'le cerveau a touché le joueur ' + reads + ' fois');
+    });
+
+    this.T('cerveau : le proxy du ctx bloque bien ctx.player', function () {
+      var s = G.soldiers[0];
+      var ctx = makeCtxProxy(buildCtx(s, G.time, 0.125));
+      var threw = false;
+      try { var v = ctx.player; if (v) threw = false; }
+      catch (e) { threw = true; }
+      assert(threw, 'la lecture de ctx.player doit lever une erreur');
+      assert(('player' in ctx) === false, 'ctx ne doit pas exposer "player"');
+    });
+
+    /* ---------- comportement ---------- */
+    this.T('comportement : un coup de feu déclenche une enquête vers la position ESTIMÉE', function () {
+      Scenario.reset(4242);
+      // deux miliciens dans le sud-ouest de la cour, à portée d'ouïe
+      var s = G.soldiers[0]; s.pos.x = 55; s.pos.y = 58;
+      var s2 = G.soldiers[1]; s2.pos.x = 48; s2.pos.y = 70;
+      Player.pos.x = 20; Player.pos.y = 80;
+      Combat.emitSound({ x: Player.pos.x, y: Player.pos.y }, CFG.noise.gunshot, 'gunshot', 'intrus', 0, false);
+      var heard = 0, errSum = 0;
+      for (var i = 0; i < G.soldiers.length; i++) {
+        var c = G.soldiers[i].memory.contacts.get('intrus');
+        if (c) { heard++; errSum += U.distP(c.pos, Player.pos); }
+      }
+      assert(heard >= 2, 'au moins deux soldats doivent entendre (' + heard + ')');
+      assert(errSum / heard > 0.5, 'la position estimée doit être erronée (moyenne ' +
+             U.fmt(errSum / heard, 1) + ' m)');
+      for (i = 0; i < 60 * 6; i++) G.step(CFG.sim.step);
+      var acting = 0;
+      for (i = 0; i < G.soldiers.length; i++) {
+        var st = G.soldiers[i].state;
+        if (st === 'SUSPICIOUS' || st === 'INVESTIGATE' || st === 'SEARCH') acting++;
+      }
+      assert(acting >= 1, 'au moins un soldat doit réagir (états observés : ' +
+             G.soldiers.map(function (x) { return x.state; }).join('/') + ')');
+    });
+
+    this.T('comportement : le contact perdu mène à la fouille puis à l\'abandon', function () {
+      Scenario.reset(777);
+      var s = G.soldiers[0];
+      s.pos.x = 70; s.pos.y = 55;
+      // un contact SONORE franc (coup de feu entendu), puis le joueur s'éloigne
+      s.memory.report({ id: 'intrus', pos: { x: 70, y: 40 }, source: 'sound', confidence: 0.8, posError: 3 }, 0);
+      Player.pos.x = 10; Player.pos.y = 10;
+      var states = {};
+      for (var i = 0; i < 60 * 70; i++) {
+        G.step(CFG.sim.step);
+        states[s.state] = (states[s.state] || 0) + 1;
+      }
+      assert(states['INVESTIGATE'] > 0, 'doit passer par ENQUÊTE');
+      assert(states['SEARCH'] > 0, 'doit passer par RECHERCHE');
+      assert(s.state === 'PATROL' || s.state === 'RETREAT',
+             'doit finir par abandonner (état final ' + s.state + ')');
+      assert(s.memory.contacts.size === 0, 'le contact doit être oublié');
+    });
+
+    /* ---------- perf ---------- */
+    this.T('perf : 16 soldats, 600 ticks de simulation', function () {
+      var saved = G.soldiers.slice();
+      var keys = ['militia', 'regular', 'sf'];
+      for (var i = 0; i < 9; i++) {
+        var s = tmpSoldier(keys[i % 3], 50 + i * 2.5, 58);
+        s.released = true;
+        G.soldiers.push(s);
+      }
+      assert(G.soldiers.length >= 16, 'il faut au moins 16 soldats, obtenu ' + G.soldiers.length);
+      var t0 = perfNow(), N = 600;
+      for (i = 0; i < N; i++) G.step(CFG.sim.step);
+      var ms = perfNow() - t0;
+      G.soldiers.length = 0;
+      for (i = 0; i < saved.length; i++) G.soldiers.push(saved[i]);
+      var per = ms / N;
+      Tests.lastPerf = { ms: ms, per: per, n: 16 };
+      assert(per < 3.0, 'budget dépassé : ' + U.fmt(per, 3) + ' ms/tick (16,7 ms par frame à 60 FPS)');
+    });
+
+    this.T('robustesse : 120 s de simulation sans erreur', function () {
+      Scenario.reset(2024);
+      var err = null;
+      try {
+        for (var i = 0; i < 60 * 120; i++) G.step(CFG.sim.step);
+      } catch (e) { err = e; }
+      assert(!err, 'exception : ' + (err && err.message));
+      for (i = 0; i < G.soldiers.length; i++) {
+        var s = G.soldiers[i];
+        assert(isFinite(s.pos.x) && isFinite(s.pos.y), 'position invalide pour ' + s.id);
+        assert(s.pos.x >= 0 && s.pos.x <= CFG.world.w && s.pos.y >= 0 && s.pos.y <= CFG.world.h,
+               s.id + ' hors de la zone');
+      }
+    });
+
+    Scenario.reset(G.seed);
+    return this.results;
+  }
+};
+
+/* =====================================================================
+   12c. QA — parcours automatisé des 9 scénarios d'acceptation
+   (accessible dans la page via ?test=1 et en console via G.QA.run())
+   ===================================================================== */
+var QA = {
+  rows: [],
+  sim: function (seconds) {
+    var n = Math.round(seconds / CFG.sim.step);
+    for (var i = 0; i < n; i++) G.step(CFG.sim.step);
+  },
+  find: function (id) {
+    for (var i = 0; i < G.soldiers.length; i++) if (G.soldiers[i].id === id) return G.soldiers[i];
+    return null;
+  },
+  alive: function (squadId) {
+    var n = 0;
+    for (var i = 0; i < G.soldiers.length; i++) {
+      if (G.soldiers[i].alive && (!squadId || G.soldiers[i].squadId === squadId)) n++;
+    }
+    return n;
+  },
+  statesOf: function (squadId) {
+    var out = [];
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var s = G.soldiers[i];
+      if (!s.alive) continue;
+      if (squadId && s.squadId !== squadId) continue;
+      out.push(s.id + ':' + (STATE_LABEL[s.state] || s.state));
+    }
+    return out.join(' ');
+  },
+  row: function (id, title, pass, detail) {
+    this.rows.push({ id: id, title: title, pass: !!pass, detail: detail });
+  },
+
+  run: function () {
+    this.rows.length = 0;
+    var seed0 = G.seed;
+    this.s1(); this.s2(); this.s3(); this.s4(); this.s5();
+    this.s6(); this.s7(); this.s8(); this.s9();
+    Scenario.reset(seed0);
+    return this.rows;
+  },
+
+  /* 1. élimination discrète de la sentinelle, puis découverte du corps */
+  s1: function () {
+    Scenario.reset(1001);
+    var sentinel = this.find('M3');
+    Player.pos.x = 95; Player.pos.y = 42;
+    Combat.emitSound(Player.pos, CFG.noise.gunshot, 'gunshot', 'intrus', G.time, false);
+    sentinel.hurt(999, G.time, 'J1');
+    this.sim(2);
+    var levelAfterKill = Command.level;
+    // le joueur se dérobe
+    Player.pos.x = 10; Player.pos.y = 80;
+    // on fait passer une patrouille près du corps (sinon la cour est grande)
+    var m2 = this.find('M2');
+    m2.pos.x = 95; m2.pos.y = 50; m2.facing = -Math.PI / 2;
+    var levels = [];
+    for (var i = 0; i < 60 * 60; i++) {
+      G.step(CFG.sim.step);
+      if (i % 60 === 0) levels.push(Command.level);
+    }
+    var body = G.bodies[0];
+    var found = body && body.found;
+    var maxLevel = Math.max.apply(null, levels.concat([Command.level]));
+    this.row(1, 'Élimination discrète de la sentinelle puis découverte du corps',
+      levelAfterKill <= 1 && found && maxLevel >= 2,
+      'niveau 2 s après le tir : ' + Command.LEVELS[levelAfterKill] +
+      ' · corps découvert : ' + (found ? 'oui' : 'non') +
+      ' · niveau max atteint : ' + Command.LEVELS[maxLevel]);
+  },
+
+  /* 2. coup de feu à découvert : enquête vers la position estimée */
+  s2: function () {
+    Scenario.reset(1002);
+    var a1 = this.find('M1'); a1.pos.x = 55; a1.pos.y = 58;
+    var a2 = this.find('M2'); a2.pos.x = 48; a2.pos.y = 70;
+    Player.pos.x = 20; Player.pos.y = 80;
+    Combat.emitSound(Player.pos, CFG.noise.gunshot, 'gunshot', 'intrus', G.time, false);
+    this.sim(0.3);
+    var heard = [], errs = [];
+    for (var i = 0; i < G.soldiers.length; i++) {
+      var c = G.soldiers[i].memory.contacts.get('intrus');
+      if (c) { heard.push(G.soldiers[i].id); errs.push(U.distP(c.pos, Player.pos)); }
+    }
+    this.sim(6);
+    var avgErr = errs.length ? errs.reduce(function (a, b) { return a + b; }, 0) / errs.length : 0;
+    var investigating = 0;
+    for (i = 0; i < G.soldiers.length; i++) {
+      var st = G.soldiers[i].state;
+      if (st === 'SUSPICIOUS' || st === 'INVESTIGATE' || st === 'SEARCH') investigating++;
+    }
+    this.row(2, 'Coup de feu à découvert : enquête vers la position estimée (pas la vraie)',
+      heard.length >= 2 && avgErr > 0.5 && investigating >= 1,
+      heard.length + ' auditeurs · erreur moyenne ' + U.fmt(avgErr, 1) + ' m · ' +
+      investigating + ' en réaction');
+  },
+
+  /* 3. contact visuel sur un régulier : couverture, radio, flanc */
+  s3: function () {
+    Scenario.reset(1003);
+    var R = G.squads.R;
+    for (var i = 0; i < R.members.length; i++) {
+      var m = R.members[i];
+      m.released = true;
+      m.pos.x = 70 + i * 2; m.pos.y = 52;
+      // factionnaires face au nord (le joueur est au nord, à découvert)
+      m.waypoints = null; m.isStatic = true;
+      m.facing = -Math.PI / 2; m.facing0 = -Math.PI / 2;
+    }
+    Player.pos.x = 70; Player.pos.y = 38;
+    Player.crouch = false;
+    var tContact = -1, tCover = -1, roles = [], sawFlankRole = false, sawCover = false;
+    for (i = 0; i < 60 * 14; i++) {
+      G.step(CFG.sim.step);
+      for (var kk = 0; kk < R.members.length; kk++) {
+        if (R.members[kk].orders.role === 'flank') sawFlankRole = true;
+        if (R.members[kk].state === 'TAKE_COVER') sawCover = true;
+      }
+      if (tContact < 0) {
+        for (var k = 0; k < R.members.length; k++) {
+          if (R.members[k].state === 'ENGAGE' || R.members[k].state === 'TAKE_COVER') { tContact = G.time; break; }
+        }
+      }
+      if (tContact > 0 && tCover < 0) {
+        for (k = 0; k < R.members.length; k++) {
+          if (R.members[k].state === 'FLANK') { tCover = G.time; break; }
+        }
+      }
+    }
+    for (k = 0; k < R.members.length; k++) roles.push(R.members[k].id + ':' + R.members[k].orders.role);
+    var radioed = Command.reportedPos !== null;
+    this.row(3, 'Contact visuel sur un régulier : couverture, radio, flanc',
+      tContact > 0 && radioed && sawFlankRole && tCover > 0 && sawCover,
+      'contact à ' + U.fmt(tContact, 1) + ' s · couverture : ' + (sawCover ? 'oui' : 'non') +
+      ' · rôle flanc : ' + (sawFlankRole ? 'oui' : 'non') + ' · état FLANC à ' +
+      U.fmt(tCover, 1) + ' s · rôles finaux ' + roles.join(' ') +
+      ' · position rapportée : ' + (radioed ? 'oui' : 'non'));
+  },
+
+  /* 4. rupture de contact : dernière position connue → fouille → abandon */
+  s4: function () {
+    Scenario.reset(1004);
+    var s = this.find('M1');
+    // factionnaire immobile, regard au nord : il voit forcément le joueur
+    s.pos.x = 70; s.pos.y = 55; s.isStatic = true; s.waypoints = null;
+    s.facing = -Math.PI / 2; s.facing0 = -Math.PI / 2;
+    Player.pos.x = 70; Player.pos.y = 40;
+    this.sim(3);                     // il voit le joueur
+    var sawIt = s.state === 'ENGAGE' || s.state === 'TAKE_COVER' || s.state === 'SUSPICIOUS';
+    Player.pos.x = 8; Player.pos.y = 84;   // le joueur se cache
+    var seen = {};
+    for (var i = 0; i < 60 * 80; i++) { G.step(CFG.sim.step); seen[s.state] = true; }
+    this.row(4, 'Rupture de contact : dernière position connue → fouille → abandon',
+      sawIt && seen['SEARCH'] && (seen['PATROL'] || seen['RETREAT']),
+      'vu : ' + sawIt + ' · états traversés : ' + Object.keys(seen).join('/') +
+      ' · état final ' + s.state + ' · mémoire ' + s.memory.contacts.size + ' contact(s)');
+  },
+
+  /* 5. deux morts rapides : moral en chute, fuite (milice) */
+  s5: function () {
+    Scenario.reset(1005);
+    var m1 = this.find('M1'), m2 = this.find('M2'), m3 = this.find('M3');
+    m1.pos.x = 70; m1.pos.y = 58;
+    m2.pos.x = 74; m2.pos.y = 58;
+    m3.pos.x = 78; m3.pos.y = 58;
+    m3.isStatic = false;
+    var before = m3.morale;
+    m1.hurt(999, G.time, 'J1');
+    m2.hurt(999, G.time, 'J1');
+    var minMorale = 1, fled = false;
+    for (var i = 0; i < 60 * 12; i++) {
+      G.step(CFG.sim.step);
+      minMorale = Math.min(minMorale, m3.morale);
+      if (m3.state === 'FLEE' || m3.state === 'RETREAT') fled = true;
+    }
+    this.row(5, 'Deux miliciens tués : moral en chute et fuite du survivant',
+      minMorale < before && (fled || m3.morale <= m3.d.flee),
+      'moral ' + U.fmt(before, 2) + ' → ' + U.fmt(minMorale, 2) +
+      ' (seuil de fuite ' + m3.d.flee + ') · fuite observée : ' + (fled ? 'oui' : 'non') +
+      ' · état ' + m3.state);
+  },
+
+  /* 6. renforts : les réguliers sortent au niveau ALERT et vont au point rapporté */
+  s6: function () {
+    Scenario.reset(1006);
+    var reported = { x: 30, y: 70 };
+    Command.report('contact', { pos: reported, posError: 5, by: this.find('M1'), at: G.time }, G.time);
+    this.sim(0.2);
+    var released = Command.regularsReleased;
+    var R = G.squads.R;
+    var d0 = 0;
+    for (var i = 0; i < R.members.length; i++) d0 += U.distP(R.members[i].pos, reported);
+    d0 /= R.members.length;
+    this.sim(18);
+    var d1 = 0, out = 0;
+    for (i = 0; i < R.members.length; i++) {
+      d1 += U.distP(R.members[i].pos, reported);
+      if (R.members[i].pos.x < 110) out++;
+    }
+    d1 /= R.members.length;
+    this.row(6, 'Renforts : les réguliers sortent à ALERT et vont au point RAPPORTÉ',
+      released && out >= 2 && d1 < d0 - 5,
+      'libérés : ' + released + ' · distance au point rapporté ' + U.fmt(d0, 0) + ' m → ' +
+      U.fmt(d1, 0) + ' m · ' + out + '/3 hors de la caserne');
+  },
+
+  /* 7. FS : entrée par le NE après 40 s de COMBAT, fix + flanc */
+  s7: function () {
+    Scenario.reset(1007);
+    Command.report('engaging', { pos: { x: 70, y: 45 }, posError: 4, by: this.find('M1'), at: G.time }, G.time);
+    Command.combatTime = CFG.command.sfCombatTime + 1;
+    this.sim(0.5);
+    var called = Command.sfCalled;
+    this.sim(CFG.command.sfArrivalDelay + 1);
+    var spawned = Command.sfSpawned;
+    var S = G.squads.S;
+    var roles = [], dists = [];
+    if (S) {
+      for (var i = 0; i < S.members.length; i++) {
+        roles.push(S.members[i].id + ':' + S.members[i].orders.role);
+        dists.push(U.distP(S.members[i].pos, CFG.command.sfEntry));
+      }
+    }
+    this.sim(20);
+    var roles2 = [];
+    if (S) for (i = 0; i < S.members.length; i++) roles2.push(S.members[i].state);
+    var flankCount = roles.join(' ').split('flank').length - 1;
+    this.row(7, 'Forces spéciales : entrée NE après 40 s de COMBAT, fix + flanc',
+      called && spawned && S && flankCount >= 1,
+      'appelées : ' + called + ' · déployées : ' + spawned + ' · rôles ' + roles.join(' ') +
+      ' · états après 20 s : ' + roles2.join('/'));
+  },
+
+  /* 8. pierre : enquête sur le bruit, ténacité selon la doctrine */
+  s8: function () {
+    Scenario.reset(1008);
+    // une milice et des réguliers (libérés) en terrain ouvert, à l'ouest
+    var m = this.find('M1'); m.pos.x = 36; m.pos.y = 66;
+    var R = G.squads.R;
+    var spots = [{ x: 30, y: 72 }, { x: 34, y: 76 }, { x: 28, y: 68 }];
+    for (var i = 0; i < R.members.length; i++) {
+      R.members[i].released = true;
+      R.members[i].pos.x = spots[i].x; R.members[i].pos.y = spots[i].y;
+    }
+    var rock = { x: 40, y: 70 };
+    // le joueur est loin, hors de vue (caserne) : seul le bruit compte
+    Player.pos.x = 125; Player.pos.y = 65;
+    Combat.emitSound(rock, CFG.noise.rock, 'impact', null, G.time, false);
+    this.sim(5);
+    var investigating = 0;
+    for (i = 0; i < G.soldiers.length; i++) {
+      var st = G.soldiers[i].state;
+      if (st === 'INVESTIGATE' || st === 'SEARCH' || st === 'SUSPICIOUS') investigating++;
+    }
+    // On mesure la DURÉE DU PREMIER ÉPISODE DE FOUILLE (ténacité par doctrine) :
+    // entrée en RECHERCHE → premier abandon (REPLI ou PATROUILLE).
+    var track = [m].concat(R.members);
+    var t0 = [], tGive = [];
+    for (i = 0; i < track.length; i++) { t0.push(-1); tGive.push(-1); }
+    for (i = 0; i < 60 * 120; i++) {
+      G.step(CFG.sim.step);
+      for (var j2 = 0; j2 < track.length; j2++) {
+        var ts = track[j2];
+        if (!ts.alive) continue;
+        if (t0[j2] < 0 && ts.state === 'SEARCH') t0[j2] = G.time;
+        if (t0[j2] >= 0 && tGive[j2] < 0 && (ts.state === 'RETREAT' || ts.state === 'PATROL')) {
+          tGive[j2] = G.time;
+        }
+      }
+      if (tGive[0] > 0 && tGive.slice(1).every(function (v) { return v > 0; })) break;
+    }
+    var durM = tGive[0] > 0 ? tGive[0] - t0[0] : -1;
+    var sum = 0, cnt = 0;
+    for (j2 = 1; j2 < track.length; j2++) {
+      if (tGive[j2] > 0) { sum += tGive[j2] - t0[j2]; cnt++; }
+    }
+    var durR = cnt ? sum / cnt : -1;
+    this.row(8, 'Pierre : enquête sur le bruit, ténacité selon la doctrine',
+      investigating >= 1 && durR > durM + 2,
+      investigating + ' en réaction · durée du 1er épisode de fouille : milice ' +
+      U.fmt(durM, 1) + ' s vs réguliers ' + U.fmt(durR, 1) + ' s' +
+      ' · états finaux : milice ' + (STATE_LABEL[m.state] || m.state) + ', ' + this.statesOf('R'));  },
+
+  /* 9. non-omniscience + perf + long run */
+  s9: function () {
+    Scenario.reset(1009);
+    // test du proxy
+    var real = G.player, reads = 0, err = null;
+    G.player = new Proxy(real, { get: function (t, k) { reads++; return t[k]; } });
+    try {
+      for (var i = 0; i < 60 * 30; i++) G.step(CFG.sim.step);
+    } catch (e) { err = e; }
+    G.player = real;
+    // perf : 16 soldats
+    var saved = G.soldiers.slice();
+    var keys = ['militia', 'regular', 'sf'];
+    for (i = 0; i < 6; i++) {
+      var extra = tmpSoldier(keys[i % 3], 50 + i * 3, 55);
+      extra.released = true;
+      G.soldiers.push(extra);
+    }
+    var t0 = perfNow();
+    for (i = 0; i < 600; i++) G.step(CFG.sim.step);
+    var per = (perfNow() - t0) / 600;
+    G.soldiers.length = 0;
+    for (i = 0; i < saved.length; i++) G.soldiers.push(saved[i]);
+    this.row(9, 'Non-omniscience, 16 soldats en 60 FPS, 5 min sans erreur console',
+      reads === 0 && !err && per < 4.0,
+      'accès au joueur par le cerveau : ' + reads + (err ? ' (ERREUR ' + err.message + ')' : '') +
+      ' · ' + U.fmt(per, 3) + ' ms/tick avec 16 soldats (~' + U.fmt(per * 60, 1) + ' ms/s de simulation)');
+  }
+};
+
+/* =====================================================================
+   13. ENTRÉES, UI, BOUCLE PRINCIPALE
+   ===================================================================== */
+var Input = {
+  up: false, down: false, left: false, right: false,
+  sprint: false, mouseDown: false,
+  _rockQueued: false,
+
+  init: function (cv) {
+    var self = this;
+    window.addEventListener('keydown', function (e) {
+      var c = e.code;
+      if (c === 'KeyW' || c === 'ArrowUp') self.up = true;
+      else if (c === 'KeyS' || c === 'ArrowDown') self.down = true;
+      else if (c === 'KeyA' || c === 'ArrowLeft') self.left = true;
+      else if (c === 'KeyD' || c === 'ArrowRight') self.right = true;
+      else if (c === 'ShiftLeft' || c === 'ShiftRight') self.sprint = true;
+      else if (c === 'KeyC') { Player.crouch = !Player.crouch; }
+      else if (c === 'KeyQ') { Combat.throwRock(G.time); }
+      else if (c === 'F1') { CFG.debug.on = !CFG.debug.on; e.preventDefault(); }
+      else if (c === 'KeyR') { Scenario.reset(G.seed); }
+      else if (c === 'Space') { Loop.paused = !Loop.paused; e.preventDefault(); }
+      else if (c === 'Equal' || c === 'NumpadAdd') { Loop.speedUp(); }
+      else if (c === 'Minus' || c === 'NumpadSubtract') { Loop.speedDown(); }
+    });
+    window.addEventListener('keyup', function (e) {
+      var c = e.code;
+      if (c === 'KeyW' || c === 'ArrowUp') self.up = false;
+      else if (c === 'KeyS' || c === 'ArrowDown') self.down = false;
+      else if (c === 'KeyA' || c === 'ArrowLeft') self.left = false;
+      else if (c === 'KeyD' || c === 'ArrowRight') self.right = false;
+      else if (c === 'ShiftLeft' || c === 'ShiftRight') self.sprint = false;
+    });
+    window.addEventListener('blur', function () {
+      self.up = self.down = self.left = self.right = self.sprint = false;
+      self.mouseDown = false;
+    });
+    cv.addEventListener('mousemove', function (e) {
+      var r = cv.getBoundingClientRect();
+      Player.aim.x = (e.clientX - r.left) / r.width * CFG.world.w;
+      Player.aim.y = (e.clientY - r.top) / r.height * CFG.world.h;
+    });
+    cv.addEventListener('mousedown', function (e) { if (e.button === 0) self.mouseDown = true; });
+    window.addEventListener('mouseup', function (e) { if (e.button === 0) self.mouseDown = false; });
+    cv.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  }
+};
+
+var UI = {
+  el: {}, _last: 0,
+  init: function () {
+    var ids = ['vAlert', 'vTime', 'vAlive', 'vReinf', 'vHp', 'vFps', 'vSeed',
+               'btnReset', 'btnPause', 'btnSpeed', 'btnDebug', 'btnRock', 'btnSeed',
+               'seedInput', 'overlay', 'ovTitle', 'ovSub'];
+    for (var i = 0; i < ids.length; i++) this.el[ids[i]] = document.getElementById(ids[i]);
+    var self = this;
+    this.el.btnReset.addEventListener('click', function () { Scenario.reset(G.seed); });
+    this.el.btnPause.addEventListener('click', function () { Loop.paused = !Loop.paused; });
+    this.el.btnSpeed.addEventListener('click', function () { Loop.speedUp(); });
+    this.el.btnDebug.addEventListener('click', function () { CFG.debug.on = !CFG.debug.on; });
+    this.el.btnRock.addEventListener('click', function () {
+      var p = World.randomFreeNear(20 + G.rng() * 90, 20 + G.rng() * 60, 12, G.rng, 20);
+      Combat.emitSound(p, CFG.noise.rock, 'impact', null, G.time, true);
+      logEvent('DEBUG: bruit de pierre en (' + Math.round(p.x) + ',' + Math.round(p.y) + ')');
+    });
+    this.el.btnSeed.addEventListener('click', function () {
+      var v = parseInt(self.el.seedInput.value, 10);
+      if (isFinite(v)) { Scenario.reset(v >>> 0); }
+    });
+    this.el.seedInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') self.el.btnSeed.click();
+      e.stopPropagation();
+    });
+  },
+
+  update: function (now) {
+    if (now - this._last < 0.1) return;
+    this._last = now;
+    var e = this.el;
+    e.vAlert.textContent = Command.levelName();
+    e.vAlert.style.color = ['#7b8798', '#e8d24c', '#e8a54c', '#e05a4c'][Command.level];
+    e.vTime.textContent = U.fmt(G.time, 1) + ' s';
+    e.vAlive.textContent = QA.alive() + ' / ' + G.soldiers.length;
+    e.vReinf.textContent = Command.sfSpawned ? 'FS déployées'
+      : (Command.sfCalled ? 'FS en route' : (Command.regularsReleased ? 'réguliers' : 'aucun'));
+    e.vHp.textContent = String(Math.round(Player.hp));
+    e.vFps.textContent = String(Math.round(Loop.fps));
+    e.vSeed.textContent = String(G.seed);
+    e.btnDebug.textContent = 'Debug ' + (CFG.debug.on ? 'ON' : 'OFF') + ' (F1)';
+    e.btnPause.textContent = Loop.paused ? 'Reprendre' : 'Pause (Espace)';
+    e.btnSpeed.textContent = 'Vitesse x' + Loop.scale();
+  },
+
+  showOverlay: function (title, sub) {
+    this.el.ovTitle.textContent = title;
+    this.el.ovSub.textContent = sub;
+    this.el.overlay.classList.add('on');
+  },
+  hideOverlay: function () { this.el.overlay.classList.remove('on'); },
+
+  showTests: function (tests, qa) {
+    var pre = document.createElement('pre');
+    pre.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;margin:0;padding:14px;' +
+      'background:#0b0e13;color:#c9d4e2;overflow:auto;z-index:99;white-space:pre-wrap;' +
+      'font:12px/1.55 ui-monospace,monospace';
+    var L = [];
+    var pass = 0;
+    for (var i = 0; i < tests.length; i++) {
+      if (tests[i].ok) pass++;
+      L.push((tests[i].ok ? 'PASS  ' : 'FAIL  ') + tests[i].name +
+             (tests[i].ok ? '' : '   → ' + tests[i].msg));
+    }
+    L.push('');
+    L.push('SELF-TESTS : ' + pass + '/' + tests.length + ' PASS');
+    if (qa && qa.length) {
+      L.push('');
+      L.push('--- SCÉNARIOS D\'ACCEPTATION ---');
+      for (i = 0; i < qa.length; i++) {
+        L.push((qa[i].pass ? 'PASS  ' : 'FAIL  ') + qa[i].id + '. ' + qa[i].title);
+        L.push('        ' + qa[i].detail);
+      }
+    }
+    pre.textContent = L.join('\n');
+    document.body.appendChild(pre);
+    return L.join('\n');
+  }
+};
+
+var Loop = {
+  last: 0, acc: 0, paused: false, scaleIdx: 2,
+  fps: 60, _fpsAcc: 0, _fpsN: 0, _bound: null,
+
+  scale: function () { return CFG.sim.timeScales[this.scaleIdx]; },
+  speedUp: function () {
+    this.scaleIdx = Math.min(CFG.sim.timeScales.length - 1, this.scaleIdx + 1);
+  },
+  speedDown: function () { this.scaleIdx = Math.max(0, this.scaleIdx - 1); },
+
+  frame: function (ts) {
+    requestAnimationFrame(this._bound);
+    var now = ts / 1000;
+    var dt = this.last ? now - this.last : 0;
+    this.last = now;
+    if (dt > 0.25) dt = 0.25;
+
+    this._fpsAcc += dt; this._fpsN++;
+    if (this._fpsAcc >= 0.5) {
+      this.fps = this._fpsN / this._fpsAcc;
+      this._fpsAcc = 0; this._fpsN = 0;
+    }
+
+    if (!this.paused && Player.alive) {
+      this.acc += dt * this.scale();
+      var steps = 0;
+      while (this.acc >= CFG.sim.step && steps < CFG.sim.maxStepsPerFrame) {
+        G.step(CFG.sim.step);
+        this.acc -= CFG.sim.step;
+        steps++;
+      }
+      if (this.acc > CFG.sim.step * CFG.sim.maxStepsPerFrame) this.acc = 0;
+    }
+    Render.draw(G.time);
+    UI.update(now);
+  }
+};
+Loop._bound = function (ts) { Loop.frame(ts); };
+
+/* --- purge des effets ------------------------------------------------- */
+function prune(arr, now) {
+  for (var i = arr.length - 1; i >= 0; i--) {
+    if (now - arr[i].born > arr[i].ttl) arr.splice(i, 1);
+  }
+}
+
+/* =====================================================================
+   NAMESPACE GLOBAL G + BOUCLE DE SIMULATION (un pas fixe)
+   ===================================================================== */
+var G = {
+  CFG: CFG, U: U, World: World, DOCTRINES: DOCTRINES, STATE_LABEL: STATE_LABEL,
+  Radio: Radio, Soldier: Soldier, Brain: Brain, Squad: Squad, Command: Command,
+  Player: Player, Combat: Combat, Render: Render, Scenario: Scenario,
+  Tests: Tests, QA: QA, Loop: Loop, UI: UI, Input: Input,
+  Perception: Perception, ContactMemory: ContactMemory,
+
+  soldiers: [], squads: {}, bodies: [], noises: [], tracers: [], sparks: [],
+  muzzles: [], rocks: [], radioFx: [], log: [],
+  rng: U.mulberry32(12345), seed: 12345, time: 0,
+  player: Player,             // référence piégeable par les tests d'omniscience
+
+  step: function (dt) {
+    G.time += dt;
+    Combat.updateRocks(dt, G.time);
+    Player.update(dt, G.time);
+    for (var i = 0; i < G.soldiers.length; i++) updateSoldier(G.soldiers[i], dt, G.time);
+    Radio.update(G.time);
+    var keys = ['M', 'R', 'S'];
+    for (var k = 0; k < keys.length; k++) {
+      var sq = G.squads[keys[k]];
+      if (sq) sq.update(dt, G.time);
+    }
+    Command.update(dt, G.time);
+    prune(G.tracers, G.time); prune(G.sparks, G.time);
+    prune(G.muzzles, G.time); prune(G.radioFx, G.time);
+    for (i = G.noises.length - 1; i >= 0; i--) {
+      if (G.time - G.noises[i].born > G.noises[i].life) G.noises.splice(i, 1);
+    }
+  }
+};
+window.G = G;
+
+/* --- amorçage ---------------------------------------------------------- */
+function getParam(name) {
+  try {
+    var q = window.location.search || '';
+    var m = new RegExp('[?&]' + name + '=([^&]*)').exec(q);
+    return m ? decodeURIComponent(m[1]) : null;
+  } catch (e) { return null; }
+}
+
+function boot() {
+  var seed = parseInt(getParam('seed'), 10);
+  if (!isFinite(seed)) seed = 12345;
+  Render.init();
+  UI.init();
+  Input.init(Render.cv);
+  UI.el.seedInput.value = String(seed);
+  Scenario.reset(seed >>> 0);
+  UI.hideOverlay();
+
+  if (getParam('test') === '1') {
+    var res = Tests.run();
+    var qa = QA.run();
+    var text = UI.showTests(res, qa);
+    var pass = res.filter(function (r) { return r.ok; }).length;
+    console.log(text);
+    console.log('SELF-TESTS ' + pass + '/' + res.length);
+    G.testResults = res;
+    G.qaResults = qa;
+  }
+  requestAnimationFrame(Loop._bound);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
+} else {
+  boot();
+}
+
+})();
+</script>
+</body>
+</html>
